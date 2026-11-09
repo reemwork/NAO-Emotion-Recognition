@@ -71,6 +71,11 @@ class ChildResponse(BaseModel):
     spoken_text: str
 
 
+class ScenarioEvent(BaseModel):
+    session_id: str
+    scenario_id: int
+
+
 class FacialResult(BaseModel):
     session_id: str
     scenario_id: int
@@ -95,6 +100,9 @@ def start_session():
     sessions[session_id] = {
         "session_id": session_id,
         "status": "active",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "active_scenario_id": None,
+        "scenario_progress": {},
         "results": []
     }
     save_sessions()
@@ -120,6 +128,109 @@ def get_next_scenario(index: int = 0):
         "message": "All scenarios completed."
     }
 
+
+
+
+@app.post("/api/scenario/start")
+def start_scenario(data: ScenarioEvent):
+    session = sessions.get(data.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if session.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Session is not active.")
+
+    if not any(
+        scenario["scenario_id"] == data.scenario_id
+        for scenario in scenarios_db
+    ):
+        raise HTTPException(status_code=404, detail="Scenario not found.")
+
+    active_id = session.get("active_scenario_id")
+    if active_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Scenario {active_id} is already in progress."
+        )
+
+    progress = session.setdefault("scenario_progress", {})
+    key = str(data.scenario_id)
+    if key in progress or any(
+        result["scenario_id"] == data.scenario_id
+        for result in session["results"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This scenario was already started or evaluated."
+        )
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    progress[key] = {
+        "status": "in_progress",
+        "started_at": started_at,
+        "completed_at": None
+    }
+    session["active_scenario_id"] = data.scenario_id
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "scenario_id": data.scenario_id,
+        "scenario_status": "in_progress",
+        "started_at": started_at
+    }
+
+
+@app.post("/api/scenario/complete")
+def complete_scenario(data: ScenarioEvent):
+    session = sessions.get(data.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if not any(
+        scenario["scenario_id"] == data.scenario_id
+        for scenario in scenarios_db
+    ):
+        raise HTTPException(status_code=404, detail="Scenario not found.")
+
+    progress = session.get("scenario_progress", {})
+    state = progress.get(str(data.scenario_id))
+    if (
+        state is None
+        or state.get("status") != "in_progress"
+        or session.get("active_scenario_id") != data.scenario_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This scenario is not currently in progress."
+        )
+
+    # Complete only after a verbal response has been saved.
+    # Handling missing/failed audio will be added separately.
+    if not any(
+        result["scenario_id"] == data.scenario_id
+        for result in session["results"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot complete a scenario without a saved verbal response."
+        )
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    state["status"] = "completed"
+    state["completed_at"] = completed_at
+    session["active_scenario_id"] = None
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "scenario_id": data.scenario_id,
+        "scenario_status": "completed",
+        "started_at": state["started_at"],
+        "completed_at": completed_at
+    }
 
 
 @app.post("/api/response/submit")
@@ -408,6 +519,11 @@ def get_session_results(session_id: str):
         "session_id": session_id,
         "total_scenarios": len(scenarios_db),
         "total_responses": len(results),
+        "session_status": session.get("status", "active"),
+        "session_started_at": session.get("started_at"),
+        "active_scenario_id": session.get("active_scenario_id"),
+        "scenario_progress": session.get("scenario_progress", {}),
+        "captured_frames": session.get("captured_frames", {}),
         "results": results,
         "summary": summary
     }
