@@ -1,12 +1,25 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
-from PIL import Image
+﻿import glob
+import json
 import os
-from datetime import datetime
-from backend.transcribe_audio import transcribe_audio
-import subprocess
-import glob
 import re
+import subprocess
+from collections import Counter
+from datetime import datetime, timezone
+from html import escape
+from io import BytesIO
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
+
+import requests
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse
+from PIL import Image
+from pydantic import BaseModel, Field
+
+from backend.emotion_classifier import classify_emotion
+from backend.transcribe_audio import model as whisper_model
+from backend.transcribe_audio import transcribe_audio
 
 app = FastAPI(
     title="NAO Emotion Training Backend",
@@ -14,30 +27,58 @@ app = FastAPI(
 )
 
 
-scenarios_db = [
-    {
-        "id": 1,
-        "emotion": "happy",
-        "question": "Look at me! Am I happy or sad?",
-        "options": ["Happy", "Sad"],
-        "correct": "Happy",
-        "image_url": "/static/images/happy_scenario.jpg"
-    },
-    {
-        "id": 2,
-        "emotion": "sad",
-        "question": "How do I look now? Do I look sad or angry?",
-        "options": ["Sad", "Angry"],
-        "correct": "Sad",
-        "image_url": "/static/images/sad_scenario.jpg"
-    }
-]
 
+ROOT = Path(__file__).resolve().parent.parent
+SCENARIOS_FILE = ROOT / "data" / "scenarios.json"
+
+with open(SCENARIOS_FILE, "r", encoding="utf-8") as file:
+    scenarios_db = json.load(file)
+SESSIONS_FILE = ROOT / "data" / "sessions.json"
+
+
+def load_sessions():
+    if not SESSIONS_FILE.exists():
+        return {}
+
+    with open(SESSIONS_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+sessions = load_sessions()
+
+
+def save_sessions():
+    SESSIONS_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    temp_file = SESSIONS_FILE.with_suffix(".json.tmp")
+
+    with open(temp_file, "w", encoding="utf-8") as file:
+        json.dump(
+            sessions,
+            file,
+            indent=4,
+            ensure_ascii=False
+        )
+
+    temp_file.replace(SESSIONS_FILE)
 
 class ChildResponse(BaseModel):
+    session_id: str
     scenario_id: int
     spoken_text: str
 
+
+class FacialResult(BaseModel):
+    session_id: str
+    scenario_id: int
+    dominant_emotion: Literal[
+        "Happy", "Sad", "Angry", "Neutral",
+        "Fear", "Surprise", "Disgust"
+    ]
+    confidence: float = Field(ge=0, le=1)
 
 @app.get("/")
 def read_root():
@@ -46,10 +87,20 @@ def read_root():
     }
 
 
+
 @app.post("/api/session/start")
 def start_session():
+    session_id = str(uuid4())
+
+    sessions[session_id] = {
+        "session_id": session_id,
+        "status": "active",
+        "results": []
+    }
+    save_sessions()
     return {
         "status": "success",
+        "session_id": session_id,
         "total_scenarios": len(scenarios_db)
     }
 
@@ -70,15 +121,92 @@ def get_next_scenario(index: int = 0):
     }
 
 
+
+@app.post("/api/response/submit")
+
 @app.post("/api/response/submit")
 def submit_response(data: ChildResponse):
-    return {
-        "status": "success",
-        "message": "Response received and logged successfully",
+
+    session = sessions.get(data.session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    scenario = next(
+        (
+            item for item in scenarios_db
+            if item["scenario_id"] == data.scenario_id
+        ),
+        None
+    )
+
+    if scenario is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Scenario not found."
+        )
+
+    spoken_text = data.spoken_text.strip()
+
+    if not spoken_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Response cannot be empty."
+        )
+
+    if any(
+        result["scenario_id"] == data.scenario_id
+        for result in session["results"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Response already submitted for this scenario."
+        )
+
+    # Step 1: Classify the verbal response using Qwen
+    try:
+        predicted_emotion = classify_emotion(spoken_text)
+
+    except (requests.RequestException, RuntimeError) as error:
+        print("MLLM classification failed:", error)
+        raise HTTPException(
+            status_code=503,
+            detail="Emotion classification is unavailable."
+        )
+
+    # Step 2: Compare prediction with the reference label
+    reference_label = scenario["reference_label"]
+
+    if predicted_emotion == "Unclear":
+        evaluation = "Unclear"
+
+    elif predicted_emotion == reference_label:
+        evaluation = "Correct"
+
+    else:
+        evaluation = "Incorrect"
+
+    # Step 3: Save the result in the current session
+    result = {
         "scenario_id": data.scenario_id,
-        "received_text": data.spoken_text
+        "reference_label": reference_label,
+        "spoken_text": spoken_text,
+        "predicted_emotion": predicted_emotion,
+        "evaluation": evaluation
     }
 
+    session["results"].append(result)
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "saved_result": result,
+        "total_responses": len(session["results"])
+    }
 
 @app.post("/api/camera/frame")
 async def upload_camera_frame(frame: UploadFile = File(...)):
@@ -237,3 +365,542 @@ def capture_nao_audio():
         "message": "NAO audio downloaded successfully",
         "audio_file": audio_file_path
     }
+
+
+@app.get("/api/session/{session_id}")
+def get_session_results(session_id: str):
+
+    session = sessions.get(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    results = session["results"]
+
+    summary = {
+        "correct": sum(
+            r["evaluation"] == "Correct"
+            for r in results
+        ),
+        "incorrect": sum(
+            r["evaluation"] == "Incorrect"
+            for r in results
+        ),
+        "unclear": sum(
+            r["evaluation"] == "Unclear"
+            for r in results
+        )
+    }
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "total_scenarios": len(scenarios_db),
+        "total_responses": len(results),
+        "results": results,
+        "summary": summary
+    }
+
+
+@app.post("/api/audio/evaluate")
+def evaluate_audio(
+    session_id: str = Form(...),
+    scenario_id: int = Form(...),
+    audio: UploadFile = File(...)
+):
+    # Verify that the session exists.
+    session = sessions.get(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    # Verify that the scenario exists.
+    if not any(
+        item["scenario_id"] == scenario_id
+        for item in scenarios_db
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="Scenario not found."
+        )
+
+    # Prevent duplicate submissions.
+    if any(
+        result["scenario_id"] == scenario_id
+        for result in session["results"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Response already submitted for this scenario."
+        )
+
+    # Accept WAV recordings only.
+    if not (audio.filename or "").lower().endswith(".wav"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only WAV audio files are supported."
+        )
+
+    # Read and validate uploaded audio.
+    audio_data = audio.file.read()
+
+    if not audio_data or len(audio_data) > 20 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio must be non-empty and at most 20 MB."
+        )
+
+    # Save audio under the current session.
+    audio_folder = (
+        ROOT / "data" / "session_audio" / session_id
+    )
+
+    audio_folder.mkdir(parents=True, exist_ok=True)
+
+    audio_filename = (
+        f"scenario_{scenario_id}_{uuid4().hex[:8]}.wav"
+    )
+
+    audio_path = audio_folder / audio_filename
+    audio_path.write_bytes(audio_data)
+
+    # Step 1: Speech-to-text using Whisper.
+    try:
+        whisper_result = whisper_model.transcribe(
+            str(audio_path),
+            language="en",
+            fp16=False
+        )
+
+        transcript = whisper_result["text"].strip()
+
+    except Exception as error:
+        audio_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Audio transcription failed."
+        ) from error
+
+    if not transcript:
+        audio_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=422,
+            detail="No speech was recognized."
+        )
+
+    # Step 2: Reuse the existing Qwen evaluation.
+    try:
+        response = submit_response(
+            ChildResponse(
+                session_id=session_id,
+                scenario_id=scenario_id,
+                spoken_text=transcript
+            )
+        )
+
+    except HTTPException:
+        audio_path.unlink(missing_ok=True)
+        raise
+
+    # Step 3: Link audio to the saved result.
+    relative_audio_path = audio_path.relative_to(ROOT)
+
+    response["saved_result"]["audio_file"] = (
+        relative_audio_path.as_posix()
+    )
+
+    save_sessions()
+
+    return response
+
+@app.post("/api/camera/session-frame")
+async def upload_session_frame(
+    session_id: str = Form(...),
+    scenario_id: int = Form(...),
+    frame: UploadFile = File(...)
+):
+    # Step 1: Validate the session.
+    session = sessions.get(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    # Step 2: Find the scenario result.
+    result = next(
+        (
+            item for item in session["results"]
+            if item["scenario_id"] == scenario_id
+        ),
+        None
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No saved response for this scenario."
+        )
+
+    # Step 3: Read and validate the image.
+    contents = await frame.read()
+
+    if not contents or len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="Image must be non-empty and at most 10 MB."
+        )
+
+    try:
+        with Image.open(BytesIO(contents)) as uploaded:
+            if uploaded.width * uploaded.height > 20_000_000:
+                raise ValueError("Image dimensions are too large.")
+
+            image = uploaded.convert("RGB")
+
+    except (OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid image file."
+        )
+
+    # Step 4: Save the image.
+    image_folder = (
+        ROOT / "data" / "session_frames" / session_id
+    )
+    image_folder.mkdir(parents=True, exist_ok=True)
+
+    filename = f"scenario_{scenario_id}_{uuid4().hex[:8]}.jpg"
+    image_path = image_folder / filename
+
+    image.save(image_path, format="JPEG", quality=90)
+
+    # Step 5: Link the image to the scenario.
+    result["face_image_file"] = (
+        image_path.relative_to(ROOT).as_posix()
+    )
+
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "scenario_id": scenario_id,
+        "image_file": result["face_image_file"],
+        "message": "Face image linked to session successfully."
+    }
+
+
+
+@app.post("/api/facial/result")
+def save_facial_result(data: FacialResult):
+
+    # Verify session
+    session = sessions.get(data.session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    # Find the matching scenario response
+    result = next(
+        (
+            item for item in session["results"]
+            if item["scenario_id"] == data.scenario_id
+        ),
+        None
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No saved response for this scenario."
+        )
+
+    # Store a facial observation
+    observation = {
+        "observation_id": str(uuid4()),
+        "dominant_emotion": data.dominant_emotion,
+        "confidence": data.confidence,
+        "image_file": result.get("face_image_file"),
+        "source": "mock",
+        "recorded_at": datetime.now(
+            timezone.utc
+        ).isoformat()
+    }
+
+    # Support multiple observations per scenario
+    result.setdefault(
+        "facial_observations", []
+    ).append(observation)
+
+    # Save session permanently
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "scenario_id": data.scenario_id,
+        "facial_result": observation,
+        "total_observations": len(
+            result["facial_observations"]
+        )
+    }
+
+
+@app.get("/api/session/{session_id}/report")
+def generate_session_report(session_id: str):
+
+    session = sessions.get(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    results = session["results"]
+
+    correct = sum(
+        r.get("evaluation") == "Correct"
+        for r in results
+    )
+
+    incorrect = sum(
+        r.get("evaluation") == "Incorrect"
+        for r in results
+    )
+
+    unclear = sum(
+        r.get("evaluation") == "Unclear"
+        for r in results
+    )
+
+    evaluated = correct + incorrect
+
+    accuracy = (
+        round(correct / evaluated * 100, 2)
+        if evaluated > 0 else None
+    )
+
+    facial_emotions = []
+    mock_count = 0
+    scenario_reports = []
+
+    for result in results:
+
+        observations = result.get(
+            "facial_observations", []
+        )
+
+        real_observations = []
+
+        for obs in observations:
+            if obs.get("source") == "mock":
+                mock_count += 1
+
+            elif obs.get("source") == "resmaskingnet":
+                real_observations.append(obs)
+                facial_emotions.append(
+                    obs["dominant_emotion"]
+                )
+
+        verbal_emotion = result.get(
+            "predicted_emotion"
+        )
+
+        if real_observations:
+
+            dominant_facial = Counter(
+                obs["dominant_emotion"]
+                for obs in real_observations
+            ).most_common(1)[0][0]
+
+            if verbal_emotion == "Unclear":
+                comparison = "Unavailable"
+
+            elif verbal_emotion == dominant_facial:
+                comparison = "Agreement"
+
+            else:
+                comparison = "Mismatch"
+
+        else:
+            dominant_facial = None
+            comparison = "Unavailable"
+
+        scenario_reports.append({
+            "scenario_id": result["scenario_id"],
+            "reference_label": result["reference_label"],
+            "spoken_text": result["spoken_text"],
+            "verbal_emotion": verbal_emotion,
+            "answer_evaluation": result["evaluation"],
+            "dominant_facial_expression": dominant_facial,
+            "verbal_facial_comparison": comparison
+        })
+
+    most_frequent_facial = (
+        Counter(facial_emotions).most_common(1)[0][0]
+        if facial_emotions else None
+    )
+
+    return {
+        "session_id": session_id,
+        "report_type": "Technical Prototype Report",
+        "total_scenarios": len(scenarios_db),
+        "completed_scenarios": len(results),
+        "verbal_performance": {
+            "correct": correct,
+            "incorrect": incorrect,
+            "unclear": unclear,
+            "accuracy_excluding_unclear": accuracy
+        },
+        "facial_analysis": {
+            "model_observations": len(facial_emotions),
+            "mock_observations_excluded": mock_count,
+            "most_frequent_expression": most_frequent_facial
+        },
+        "scenario_details": scenario_reports
+    }
+
+@app.get(
+    "/api/session/{session_id}/report/view",
+    response_class=HTMLResponse
+)
+def view_session_report(session_id: str):
+
+    report = generate_session_report(session_id)
+
+    performance = report["verbal_performance"]
+    facial = report["facial_analysis"]
+
+    accuracy = performance["accuracy_excluding_unclear"]
+    accuracy_text = (
+        f"{accuracy}%"
+        if accuracy is not None
+        else "N/A"
+    )
+
+    rows = ""
+
+    for item in report["scenario_details"]:
+        rows += f"""
+        <tr>
+            <td>{item['scenario_id']}</td>
+            <td>{escape(str(item['reference_label']))}</td>
+            <td>{escape(str(item['spoken_text']))}</td>
+            <td>{escape(str(item['verbal_emotion']))}</td>
+            <td>{escape(str(item['answer_evaluation']))}</td>
+            <td>{escape(str(item['dominant_facial_expression'] or 'N/A'))}</td>
+            <td>{escape(str(item['verbal_facial_comparison']))}</td>
+        </tr>
+        """
+
+    if not rows:
+        rows = '<tr><td colspan="7">No completed scenarios.</td></tr>'
+
+    styles = """
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            color: #203047;
+            margin: 40px;
+            line-height: 1.6;
+        }
+        h1, h2 { color: #174a75; }
+        .subtitle { color: #66788a; }
+        .section {
+            background: #f1f6fa;
+            padding: 18px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        th, td {
+            border: 1px solid #cad6df;
+            padding: 8px;
+            text-align: left;
+            overflow-wrap: anywhere;
+        }
+        th { background: #e5eef5; }
+        .note { font-size: 12px; color: #66788a; }
+        @media print {
+            body { margin: 15mm; }
+            .section { break-inside: avoid; }
+        }
+    </style>
+    """
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>NAO Session Report</title>
+        {styles}
+    </head>
+    <body>
+        <h1>NAO Emotion Recognition</h1>
+        <p class="subtitle">Technical Prototype Session Report</p>
+
+        <p><strong>Session ID:</strong> {escape(session_id)}</p>
+        <p><strong>Completed Scenarios:</strong>
+        {report['completed_scenarios']} /
+        {report['total_scenarios']}</p>
+
+        <div class="section">
+            <h2>Verbal Performance</h2>
+            <p>Correct: {performance['correct']}</p>
+            <p>Incorrect: {performance['incorrect']}</p>
+            <p>Unclear: {performance['unclear']}</p>
+            <p>Accuracy (excluding unclear):
+            {accuracy_text}</p>
+        </div>
+
+        <div class="section">
+            <h2>Facial Expression Analysis</h2>
+            <p>Model Observations:
+            {facial['model_observations']}</p>
+            <p>Mock Observations Excluded:
+            {facial['mock_observations_excluded']}</p>
+            <p>Most Frequent Expression:
+            {escape(str(facial['most_frequent_expression'] or 'N/A'))}</p>
+        </div>
+
+        <h2>Scenario Details</h2>
+        <table>
+            <tr>
+                <th>ID</th>
+                <th>Reference</th>
+                <th>Spoken Response</th>
+                <th>Verbal Emotion</th>
+                <th>Evaluation</th>
+                <th>Facial Expression</th>
+                <th>Comparison</th>
+            </tr>
+            {rows}
+        </table>
+
+        <p class="note">
+            Prototype report generated from predefined test scenarios.
+            Mock facial observations are excluded from model results.
+            This report is not a clinical assessment.
+        </p>
+    </body>
+    </html>
+    """

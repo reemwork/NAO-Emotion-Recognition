@@ -8,7 +8,8 @@ from PIL import Image
 from io import BytesIO
 import requests
 
-ROOT = Path(__file__).resolve().parent.parent
+
+ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 MODEL = "gemma3:4b"
 

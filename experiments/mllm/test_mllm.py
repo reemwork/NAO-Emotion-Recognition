@@ -6,7 +6,7 @@ from pathlib import Path
 
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS_FILE = PROJECT_ROOT / "data" / "scenarios.json"
 
 with open(SCENARIOS_FILE, "r", encoding="utf-8") as file:

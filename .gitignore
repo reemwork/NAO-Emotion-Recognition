@@ -17,3 +17,10 @@ venv/
 
 
 mllm_debug*.txt
+data/sessions.json
+data/sessions.json.tmp
+data/session_audio/
+data/session_frames/
+
+# Scenario images - local until usage rights are verified
+data/scenario_images/
