@@ -1,0 +1,26 @@
+
+[
+  {"id": 1, "scenario_id": 1, "response": "He looks happy.", "expected": "Happy"},
+  {"id": 2, "scenario_id": 1, "response": "He is smiling and laughing.", "expected": "Happy"},
+  {"id": 3, "scenario_id": 1, "response": "He looks sad.", "expected": "Sad"},
+  {"id": 4, "scenario_id": 1, "response": "I don't know.", "expected": "Unclear"},
+  {"id": 5, "scenario_id": 1, "response": "He feels that way because he received a gift.", "expected": "Unclear"},
+
+  {"id": 6, "scenario_id": 2, "response": "She looks sad.", "expected": "Sad"},
+  {"id": 7, "scenario_id": 2, "response": "She is crying and looks upset.", "expected": "Sad"},
+  {"id": 8, "scenario_id": 2, "response": "She looks happy.", "expected": "Happy"},
+  {"id": 9, "scenario_id": 2, "response": "I'm not sure.", "expected": "Unclear"},
+  {"id": 10, "scenario_id": 2, "response": "She feels something.", "expected": "Unclear"},
+
+  {"id": 11, "scenario_id": 3, "response": "He looks angry.", "expected": "Angry"},
+  {"id": 12, "scenario_id": 3, "response": "He is shouting because someone broke his toy.", "expected": "Angry"},
+  {"id": 13, "scenario_id": 3, "response": "He looks sad.", "expected": "Sad"},
+  {"id": 14, "scenario_id": 3, "response": "I can't tell.", "expected": "Unclear"},
+  {"id": 15, "scenario_id": 3, "response": "Something happened to him.", "expected": "Unclear"},
+
+  {"id": 16, "scenario_id": 4, "response": "She looks neutral.", "expected": "Neutral"},
+  {"id": 17, "scenario_id": 4, "response": "She has no visible emotional expression.", "expected": "Neutral"},
+  {"id": 18, "scenario_id": 4, "response": "She looks angry.", "expected": "Angry"},
+  {"id": 19, "scenario_id": 4, "response": "I don't know.", "expected": "Unclear"},
+  {"id": 20, "scenario_id": 4, "response": "She is standing there.", "expected": "Unclear"}
+]

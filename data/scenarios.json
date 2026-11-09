@@ -1,0 +1,23 @@
+
+[
+  {
+    "scenario_id": 1,
+    "image_path": "data/scenario_images/happy_01.jpg",
+    "reference_label": "Happy"
+  },
+  {
+    "scenario_id": 2,
+    "image_path": "data/scenario_images/sad_01.jpg",
+    "reference_label": "Sad"
+  },
+  {
+    "scenario_id": 3,
+    "image_path": "data/scenario_images/angry_01.jpg",
+    "reference_label": "Angry"
+  },
+  {
+    "scenario_id": 4,
+    "image_path": "data/scenario_images/neutral_01.jpg",
+    "reference_label": "Neutral"
+  }
+]

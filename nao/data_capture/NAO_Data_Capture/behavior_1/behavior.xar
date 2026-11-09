@@ -23,10 +23,12 @@
 
     def __init__(self):
         GeneratedClass.__init__(self)
+        self.audio_recorder = None
 
     def onLoad(self):
         try:
             self.audio_recorder = ALProxy("ALAudioRecorder")
+            print "ALAudioRecorder is available"
         except:
             self.audio_recorder = None
             print "ALAudioRecorder is not available on this robot"
@@ -39,24 +41,29 @@
             pass
 
     def onInput_onStart(self):
+
         if self.audio_recorder is None:
-            print "Virtual NAO: audio recording skipped"
+            print "Audio recording skipped"
+            self.onStopped()
             return
 
         try:
             self.audio_recorder.startMicrophonesRecording(
-                "/home/nao/recordings/response.wav",
+                "/home/nao/response.wav",
                 "wav",
                 16000,
                 (0, 0, 1, 0)
             )
+
             print "Audio recording started"
+
         except Exception as e:
             print "Audio recording could not start:", e
             self.onStopped()
 
     def onInput_onStop(self):
         self.onUnload()
+        print "Audio recording stopped"
         self.onStopped()]]>
                 </content>
               </script>
@@ -105,7 +112,7 @@
               <Parameter name="Timeout (s)" inherits_from_parent="0" content_type="2" value="8" default_value="1" min="0" max="5000" tooltip="Duration the box waits before stimulating the output." id="5" />
               <Parameter name="Trigger timerOutput if cancelled" inherits_from_parent="0" content_type="0" value="0" default_value="1" tooltip="If the box is currently waiting and cancelled, output will be stimulated." id="6" />
             </Box>
-            <Box name="Capture_Camera" id="2" localization="8" tooltip="" x="689" y="282">
+            <Box name="Capture_Camera" id="2" localization="8" tooltip="" x="683" y="87">
               <bitmap>media/images/box/box-python-script.png</bitmap>
               <script language="4">
                 <content>
@@ -120,9 +127,9 @@
         try:
             self.video_device = ALProxy("ALVideoDevice")
             print "ALVideoDevice is available"
-        except:
+        except Exception as e:
             self.video_device = None
-            print "ALVideoDevice is not available on this robot"
+            print "ALVideoDevice is not available:", e
 
     def onUnload(self):
         if self.video_device is not None and self.client_name is not None:
@@ -134,6 +141,8 @@
             self.client_name = None
 
     def onInput_onStart(self):
+
+        print "=== CAPTURE CAMERA STARTED ==="
 
         if self.video_device is None:
             print "Camera access skipped"
@@ -149,7 +158,9 @@
                 10
             )
 
-            image = self.video_device.getImageRemote(self.client_name)
+            image = self.video_device.getImageRemote(
+                self.client_name
+            )
 
             if image is not None:
                 width = image[0]
@@ -182,7 +193,8 @@
             import uuid
 
             boundary = "----NAOBoundary" + str(uuid.uuid4())
-            url = "http://192.168.100.13:8000/api/camera/raw-frame"
+
+            url = "http://" + "169.254.149.51" + ":8000/api/camera/raw-frame"
 
             body = ""
 
@@ -199,6 +211,7 @@
             body += "Content-Type: application/octet-stream\r\n\r\n"
 
             body += image_data
+
             body += "\r\n--" + boundary + "--\r\n"
 
             request = urllib2.Request(
@@ -232,10 +245,9 @@
               <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
               <Output name="onStopped" type="1" type_size="1" nature="1" inner="0" tooltip="Signal sent when box behavior is finished." id="4" />
             </Box>
+            <Link inputowner="1" indexofinput="3" outputowner="6" indexofoutput="4" />
             <Link inputowner="1" indexofinput="2" outputowner="0" indexofoutput="2" />
             <Link inputowner="6" indexofinput="2" outputowner="0" indexofoutput="2" />
-            <Link inputowner="1" indexofinput="3" outputowner="6" indexofoutput="4" />
-            <Link inputowner="2" indexofinput="2" outputowner="0" indexofoutput="2" />
           </Diagram>
         </BehaviorKeyframe>
       </BehaviorLayer>

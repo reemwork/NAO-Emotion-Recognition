@@ -1,0 +1,21 @@
+test_id,scenario_id,reference_label,child_response,expected,predicted,passed,response_time
+1,1,Happy,He looks happy.,Happy,Happy,True,25.32
+2,1,Happy,He is smiling and laughing.,Happy,Happy,True,2.7
+3,1,Happy,He looks sad.,Sad,Sad,True,2.73
+4,1,Happy,I don't know.,Unclear,Unclear,True,5.37
+5,1,Happy,He feels that way because he received a gift.,Unclear,Happy,False,2.84
+6,2,Sad,She looks sad.,Sad,Sad,True,19.91
+7,2,Sad,She is crying and looks upset.,Sad,Sad,True,3.25
+8,2,Sad,She looks happy.,Happy,Sad,False,3.46
+9,2,Sad,I'm not sure.,Unclear,Neutral,False,3.37
+10,2,Sad,She feels something.,Unclear,Neutral,False,3.39
+11,3,Angry,He looks angry.,Angry,Angry,True,19.5
+12,3,Angry,He is shouting because someone broke his toy.,Angry,Angry,True,3.39
+13,3,Angry,He looks sad.,Sad,Sad,True,3.32
+14,3,Angry,I can't tell.,Unclear,Neutral,False,3.45
+15,3,Angry,Something happened to him.,Unclear,Neutral,False,3.49
+16,4,Neutral,She looks neutral.,Neutral,Neutral,True,6.16
+17,4,Neutral,She has no visible emotional expression.,Neutral,Neutral,True,2.68
+18,4,Neutral,She looks angry.,Angry,Angry,True,2.87
+19,4,Neutral,I don't know.,Unclear,Neutral,False,2.86
+20,4,Neutral,She is standing there.,Unclear,Neutral,False,2.84

@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from PIL import Image
-from io import BytesIO
 import os
 from datetime import datetime
-
+from backend.transcribe_audio import transcribe_audio
+import subprocess
+import glob
+import re
 
 app = FastAPI(
     title="NAO Emotion Training Backend",
@@ -39,7 +41,9 @@ class ChildResponse(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "online"}
+    return {
+        "status": "online"
+    }
 
 
 @app.post("/api/session/start")
@@ -119,7 +123,11 @@ async def upload_raw_camera_frame(
     if len(raw_data) != expected_size:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid RGB frame size. Expected {expected_size} bytes, received {len(raw_data)}."
+            detail=(
+                f"Invalid RGB frame size. "
+                f"Expected {expected_size} bytes, "
+                f"received {len(raw_data)}."
+            )
         )
 
     image = Image.frombytes(
@@ -144,4 +152,88 @@ async def upload_raw_camera_frame(
         "width": width,
         "height": height,
         "file_path": file_path
+    }
+
+#Nada's
+@app.post("/api/audio/upload")
+async def upload_nao_audio(audio: UploadFile = File(...)):
+    folder = "data/nao_audio"
+    os.makedirs(folder, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+    audio_filename = f"response_{timestamp}.wav"
+    audio_file_path = os.path.join(folder, audio_filename)
+
+    contents = await audio.read()
+
+    with open(audio_file_path, "wb") as f:
+        f.write(contents)
+
+    transcript = transcribe_audio(audio_file_path)
+
+    text_filename = f"response_{timestamp}.txt"
+    text_file_path = os.path.join(folder, text_filename)
+
+    with open(text_file_path, "w", encoding="utf-8") as f:
+        f.write(transcript)
+
+    return {
+        "status": "success",
+        "message": "NAO audio saved and transcribed successfully",
+        "audio_file": audio_file_path,
+        "text_file": text_file_path,
+        "transcript": transcript
+    }
+
+@app.post("/api/audio/capture")
+def capture_nao_audio():
+    nao_ip = "169.254.247.199"
+    remote_audio = "/home/nao/recordings/microphones/response.wav"
+
+    folder = "data/nao_audio"
+    os.makedirs(folder, exist_ok=True)
+
+    audio_files = glob.glob(
+        os.path.join(folder, "response_*.wav")
+    )
+
+    numbers = []
+
+    for file in audio_files:
+        filename = os.path.basename(file)
+
+        match = re.fullmatch(
+            r"response_(\d+)\.wav",
+            filename
+        )
+
+        if match:
+            numbers.append(int(match.group(1)))
+
+    next_number = max(numbers, default=0) + 1
+
+    audio_filename = f"response_{next_number}.wav"
+    audio_file_path = os.path.join(folder, audio_filename)
+
+    try:
+        subprocess.run(
+            [
+                "scp",
+                f"nao@{nao_ip}:{remote_audio}",
+                audio_file_path
+            ],
+            check=True
+        )
+
+    except subprocess.CalledProcessError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to download audio from NAO."
+        )
+
+    return {
+        "status": "success",
+        "message": "NAO audio downloaded successfully",
+        "audio_file": audio_file_path
     }
