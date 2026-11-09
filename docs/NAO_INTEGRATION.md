@@ -104,9 +104,9 @@ The session-ending statuses are:
 python -m unittest tests.test_backend_workflow -v
 ```
 
-Tests mock Whisper, Qwen, file uploads, and the network. Do **not** use a
-broad test-discovery pattern that also runs `tests/test_microphone.py`
-and `tests/test_camera.py`: those are manual hardware demos.
+Tests mock Whisper, Qwen, file uploads, and the network. The
+obsolete manual laptop-camera and laptop-microphone tests were removed;
+keep `tests/test_backend_workflow.py` for regression checks.
 
 ## Still pending
 
