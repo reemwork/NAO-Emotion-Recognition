@@ -198,6 +198,14 @@ def submit_response(data: ChildResponse):
         "evaluation": evaluation
     }
 
+    # Attach images captured before the verbal answer was submitted.
+    frames = session.get("captured_frames", {}).get(
+        str(data.scenario_id), []
+    )
+    if frames:
+        result["face_image_file"] = frames[-1]
+        result["face_image_files"] = frames.copy()
+
     session["results"].append(result)
     save_sessions()
 
@@ -536,19 +544,14 @@ async def upload_session_frame(
             detail="Session not found."
         )
 
-    # Step 2: Find the scenario result.
-    result = next(
-        (
-            item for item in session["results"]
-            if item["scenario_id"] == scenario_id
-        ),
-        None
-    )
-
-    if result is None:
+    # Step 2: Validate the scenario independently of the verbal response.
+    if not any(
+        item["scenario_id"] == scenario_id
+        for item in scenarios_db
+    ):
         raise HTTPException(
             status_code=404,
-            detail="No saved response for this scenario."
+            detail="Scenario not found."
         )
 
     # Step 3: Read and validate the image.
@@ -584,10 +587,24 @@ async def upload_session_frame(
 
     image.save(image_path, format="JPEG", quality=90)
 
-    # Step 5: Link the image to the scenario.
-    result["face_image_file"] = (
-        image_path.relative_to(ROOT).as_posix()
+    # Step 5: Store frames even when audio has not arrived yet.
+    relative_path = image_path.relative_to(ROOT).as_posix()
+    captured_frames = session.setdefault("captured_frames", {})
+    frames = captured_frames.setdefault(str(scenario_id), [])
+    frames.append(relative_path)
+
+    # If the response already exists, link all captured frames to it.
+    result = next(
+        (
+            item for item in session["results"]
+            if item["scenario_id"] == scenario_id
+        ),
+        None
     )
+
+    if result is not None:
+        result["face_image_file"] = relative_path
+        result["face_image_files"] = frames.copy()
 
     save_sessions()
 
@@ -595,10 +612,11 @@ async def upload_session_frame(
         "status": "success",
         "session_id": session_id,
         "scenario_id": scenario_id,
-        "image_file": result["face_image_file"],
-        "message": "Face image linked to session successfully."
+        "image_file": relative_path,
+        "total_frames": len(frames),
+        "linked_to_response": result is not None,
+        "message": "Face image saved successfully."
     }
-
 
 
 @app.post("/api/facial/result")
