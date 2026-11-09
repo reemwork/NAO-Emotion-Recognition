@@ -80,6 +80,16 @@ class SessionEnd(BaseModel):
     session_id: str
 
 
+class ScenarioRecovery(BaseModel):
+    session_id: str
+    scenario_id: int
+    action: Literal["retry", "skip"]
+    reason: Literal[
+        "no_response", "no_speech_recognized",
+        "transcription_failed", "processing_failed"
+    ]
+
+
 class FacialResult(BaseModel):
     session_id: str
     scenario_id: int
@@ -95,6 +105,17 @@ def read_root():
         "status": "online"
     }
 
+
+
+def record_scenario_issue(session, scenario_id, reason):
+    """Log a recoverable pipeline issue without treating it as an answer."""
+    state = session.get("scenario_progress", {}).get(str(scenario_id))
+    if state is not None and state.get("status") == "in_progress":
+        state.setdefault("issues", []).append({
+            "reason": reason,
+            "recorded_at": datetime.now(timezone.utc).isoformat()
+        })
+        save_sessions()
 
 
 @app.post("/api/session/start")
@@ -137,6 +158,10 @@ def end_session(data: SessionEnd):
                 state.get("status") == "completed"
                 for state in session.get("scenario_progress", {}).values()
             ),
+            "skipped_scenarios": sum(
+                state.get("status") == "skipped"
+                for state in session.get("scenario_progress", {}).values()
+            ),
             "total_scenarios": len(scenarios_db),
             "already_ended": True
         }
@@ -153,9 +178,19 @@ def end_session(data: SessionEnd):
         == "completed"
         for scenario in scenarios_db
     )
-    finished_all = completed_count == len(scenarios_db)
+    skipped_count = sum(
+        progress.get(str(scenario["scenario_id"]), {}).get("status")
+        == "skipped"
+        for scenario in scenarios_db
+    )
+    all_resolved = completed_count + skipped_count == len(scenarios_db)
 
-    session["status"] = "completed" if finished_all else "ended_early"
+    if not all_resolved:
+        session["status"] = "ended_early"
+    elif skipped_count:
+        session["status"] = "completed_with_skips"
+    else:
+        session["status"] = "completed"
     session["ended_at"] = datetime.now(timezone.utc).isoformat()
     save_sessions()
 
@@ -165,6 +200,7 @@ def end_session(data: SessionEnd):
         "session_status": session["status"],
         "ended_at": session["ended_at"],
         "completed_scenarios": completed_count,
+        "skipped_scenarios": skipped_count,
         "total_scenarios": len(scenarios_db),
         "already_ended": False
     }
@@ -263,8 +299,8 @@ def complete_scenario(data: ScenarioEvent):
             detail="This scenario is not currently in progress."
         )
 
-    # Complete only after a verbal response has been saved.
-    # Handling missing/failed audio will be added separately.
+    # Completion requires a saved response; use scenario/recovery to skip
+    # a scenario when there is no usable verbal response.
     if not any(
         result["scenario_id"] == data.scenario_id
         for result in session["results"]
@@ -290,7 +326,57 @@ def complete_scenario(data: ScenarioEvent):
     }
 
 
-@app.post("/api/response/submit")
+@app.post("/api/scenario/recovery")
+def recover_scenario(data: ScenarioRecovery):
+    session = sessions.get(data.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Session is not active.")
+
+    state = session.get("scenario_progress", {}).get(str(data.scenario_id))
+    if (
+        state is None
+        or state.get("status") != "in_progress"
+        or session.get("active_scenario_id") != data.scenario_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="This scenario is not currently in progress."
+        )
+
+    if any(
+        result["scenario_id"] == data.scenario_id
+        for result in session["results"]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The scenario already has a saved verbal response."
+        )
+
+    event = {
+        "action": data.action,
+        "reason": data.reason,
+        "recorded_at": datetime.now(timezone.utc).isoformat()
+    }
+    state.setdefault("recovery_events", []).append(event)
+
+    if data.action == "skip":
+        state["status"] = "skipped"
+        state["skip_reason"] = data.reason
+        state["completed_at"] = event["recorded_at"]
+        session["active_scenario_id"] = None
+
+    save_sessions()
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "scenario_id": data.scenario_id,
+        "scenario_status": state["status"],
+        "action": data.action,
+        "reason": data.reason
+    }
+
 
 @app.post("/api/response/submit")
 def submit_response(data: ChildResponse):
@@ -345,6 +431,7 @@ def submit_response(data: ChildResponse):
         predicted_emotion = classify_emotion(spoken_text)
 
     except (requests.RequestException, RuntimeError) as error:
+        record_scenario_issue(session, data.scenario_id, "processing_failed")
         print("MLLM classification failed:", error)
         raise HTTPException(
             status_code=503,
@@ -587,6 +674,10 @@ def get_session_results(session_id: str):
         "session_ended_at": session.get("ended_at"),
         "active_scenario_id": session.get("active_scenario_id"),
         "scenario_progress": session.get("scenario_progress", {}),
+        "skipped_scenarios": sum(
+            state.get("status") == "skipped"
+            for state in session.get("scenario_progress", {}).values()
+        ),
         "captured_frames": session.get("captured_frames", {}),
         "results": results,
         "summary": summary
@@ -675,6 +766,7 @@ def evaluate_audio(
         transcript = whisper_result["text"].strip()
 
     except Exception as error:
+        record_scenario_issue(session, scenario_id, "transcription_failed")
         audio_path.unlink(missing_ok=True)
 
         raise HTTPException(
@@ -683,6 +775,7 @@ def evaluate_audio(
         ) from error
 
     if not transcript:
+        record_scenario_issue(session, scenario_id, "no_speech_recognized")
         audio_path.unlink(missing_ok=True)
 
         raise HTTPException(
