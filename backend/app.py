@@ -76,6 +76,10 @@ class ScenarioEvent(BaseModel):
     scenario_id: int
 
 
+class SessionEnd(BaseModel):
+    session_id: str
+
+
 class FacialResult(BaseModel):
     session_id: str
     scenario_id: int
@@ -110,6 +114,59 @@ def start_session():
         "status": "success",
         "session_id": session_id,
         "total_scenarios": len(scenarios_db)
+    }
+
+
+@app.post("/api/session/end")
+def end_session(data: SessionEnd):
+    session = sessions.get(data.session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found."
+        )
+
+    # Repeated requests are safe and keep the original completion time.
+    if session.get("status") != "active":
+        return {
+            "status": "success",
+            "session_id": data.session_id,
+            "session_status": session["status"],
+            "ended_at": session.get("ended_at"),
+            "completed_scenarios": sum(
+                state.get("status") == "completed"
+                for state in session.get("scenario_progress", {}).values()
+            ),
+            "total_scenarios": len(scenarios_db),
+            "already_ended": True
+        }
+
+    if session.get("active_scenario_id") is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Complete the active scenario before ending the session."
+        )
+
+    progress = session.get("scenario_progress", {})
+    completed_count = sum(
+        progress.get(str(scenario["scenario_id"]), {}).get("status")
+        == "completed"
+        for scenario in scenarios_db
+    )
+    finished_all = completed_count == len(scenarios_db)
+
+    session["status"] = "completed" if finished_all else "ended_early"
+    session["ended_at"] = datetime.now(timezone.utc).isoformat()
+    save_sessions()
+
+    return {
+        "status": "success",
+        "session_id": data.session_id,
+        "session_status": session["status"],
+        "ended_at": session["ended_at"],
+        "completed_scenarios": completed_count,
+        "total_scenarios": len(scenarios_db),
+        "already_ended": False
     }
 
 
@@ -244,6 +301,12 @@ def submit_response(data: ChildResponse):
         raise HTTPException(
             status_code=404,
             detail="Session not found."
+        )
+
+    if session.get("status") != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Session has already ended."
         )
 
     scenario = next(
@@ -521,6 +584,7 @@ def get_session_results(session_id: str):
         "total_responses": len(results),
         "session_status": session.get("status", "active"),
         "session_started_at": session.get("started_at"),
+        "session_ended_at": session.get("ended_at"),
         "active_scenario_id": session.get("active_scenario_id"),
         "scenario_progress": session.get("scenario_progress", {}),
         "captured_frames": session.get("captured_frames", {}),
@@ -542,6 +606,12 @@ def evaluate_audio(
         raise HTTPException(
             status_code=404,
             detail="Session not found."
+        )
+
+    if session.get("status") != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Session has already ended."
         )
 
     # Verify that the scenario exists.
@@ -660,6 +730,12 @@ async def upload_session_frame(
             detail="Session not found."
         )
 
+    if session.get("status") != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Session has already ended."
+        )
+
     # Step 2: Validate the scenario independently of the verbal response.
     if not any(
         item["scenario_id"] == scenario_id
@@ -745,6 +821,12 @@ def save_facial_result(data: FacialResult):
         raise HTTPException(
             status_code=404,
             detail="Session not found."
+        )
+
+    if session.get("status") != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Session has already ended."
         )
 
     # Find the matching scenario response
