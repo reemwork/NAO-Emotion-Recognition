@@ -7,7 +7,7 @@ import re
 NAO_IP = "169.254.247.199"
 
 REMOTE_CAMERA = "/home/nao/recordings/cameras"
-REMOTE_AUDIO = "/home/nao/recordings/microphones/response.wav"
+# Legacy watcher for standalone NAO acquisition; does not tag sessions.\n# For session-aware uploads, run: python -m backend.nao_transfer --help\n# Matches the audio path saved by the current Choregraphe behavior.xar.\nREMOTE_AUDIO = "/home/nao/response.wav"
 
 LOCAL_IMAGES = "data/nao_frames"
 LOCAL_AUDIO = "data/nao_audio"
