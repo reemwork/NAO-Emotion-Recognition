@@ -181,11 +181,14 @@ class BackendWorkflowTests(unittest.TestCase):
         )
         self.assertFalse(frame["linked_to_response"])
 
-        with mock.patch.object(
-            backend.whisper_model, "transcribe",
-            return_value={"text": "He looks happy"}
-        ), mock.patch.object(
-            backend, "classify_emotion", return_value="Happy"
+        with (
+            mock.patch.object(
+                backend.whisper_model, "transcribe",
+                return_value={"text": "He looks happy"}
+            ),
+            mock.patch.object(
+                backend, "classify_emotion", return_value="Happy"
+            )
         ):
             audio = backend.evaluate_audio(
                 self.session_id, 1, sample_audio()
@@ -199,11 +202,14 @@ class BackendWorkflowTests(unittest.TestCase):
 
     def test_audio_first_then_camera(self):
         self.start()
-        with mock.patch.object(
-            backend.whisper_model, "transcribe",
-            return_value={"text": "He looks happy"}
-        ), mock.patch.object(
-            backend, "classify_emotion", return_value="Happy"
+        with (
+            mock.patch.object(
+                backend.whisper_model, "transcribe",
+                return_value={"text": "He looks happy"}
+            ),
+            mock.patch.object(
+                backend, "classify_emotion", return_value="Happy"
+            )
         ):
             backend.evaluate_audio(self.session_id, 1, sample_audio())
 
