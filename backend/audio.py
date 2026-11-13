@@ -14,6 +14,7 @@ from importlib import import_module
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from backend.transcribe_audio import model as whisper_model, transcribe_audio
 
 router = APIRouter(tags=["Audio / Speech-to-Text"])
 
