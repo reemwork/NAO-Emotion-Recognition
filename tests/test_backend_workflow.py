@@ -31,6 +31,7 @@ from backend import nao_transfer
 
 
 def sample_image():
+    """Create a small in-memory JPEG so camera tests do not need NAO."""
     stream = io.BytesIO()
     Image.new("RGB", (16, 16), "white").save(stream, format="JPEG")
     stream.seek(0)
@@ -38,6 +39,7 @@ def sample_image():
 
 
 def sample_audio():
+    """Create a lightweight fake WAV upload; Whisper is mocked in these tests."""
     return UploadFile(
         filename="recording.wav",
         file=io.BytesIO(b"RIFF" + b"0" * 44)
@@ -45,7 +47,9 @@ def sample_audio():
 
 
 class BackendWorkflowTests(unittest.TestCase):
+    """Integration-style tests using mocked model/robot interfaces."""
     def setUp(self):
+        """Isolate session state/files in a fresh temporary directory for each test."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.patch_root = mock.patch.object(
@@ -60,14 +64,17 @@ class BackendWorkflowTests(unittest.TestCase):
         self.session_id = backend.start_session()["session_id"]
 
     def event(self, scenario_id=1):
+        """Build a scenario request referring to the current test session."""
         return backend.ScenarioEvent(
             session_id=self.session_id, scenario_id=scenario_id
         )
 
     def start(self, scenario_id=1):
+        """Start a scenario through the real backend handler."""
         return backend.start_scenario(self.event(scenario_id))
 
     def submit(self, scenario_id=1, emotion="Happy"):
+        """Mock Qwen to submit a predictable answer without running Ollama."""
         with mock.patch.object(
             backend, "classify_emotion", return_value=emotion
         ):
@@ -80,6 +87,7 @@ class BackendWorkflowTests(unittest.TestCase):
             )
 
     def recovery(self, action="skip", reason="no_response", scenario_id=1):
+        """Build and issue a retry/skip request for a test scenario."""
         return backend.recover_scenario(
             backend.ScenarioRecovery(
                 session_id=self.session_id,
@@ -90,6 +98,7 @@ class BackendWorkflowTests(unittest.TestCase):
         )
 
     def test_two_scenarios_in_one_session(self):
+        """Ensure multiple scenarios share one session and correctly count answers."""
         self.start(1)
         self.submit(1)
         backend.complete_scenario(self.event(1))
@@ -103,6 +112,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(result["scenario_progress"]["2"]["status"], "completed")
 
     def test_no_response_is_skipped_not_unclear(self):
+        """Skipping due to silence must not create a false 'Unclear' answer."""
         self.start(1)
         skipped = self.recovery(action="skip", reason="no_response")
         self.assertEqual(skipped["scenario_status"], "skipped")
@@ -113,6 +123,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.start(2)  # A skipped question must not block the next one.
 
     def test_retry_keeps_scenario_open(self):
+        """Confirm retry does not resolve the scenario until an answer is submitted."""
         self.start()
         result = self.recovery(
             action="retry", reason="no_speech_recognized"
@@ -123,6 +134,7 @@ class BackendWorkflowTests(unittest.TestCase):
                          "completed")
 
     def test_processing_failure_is_logged_and_retry_is_possible(self):
+        """Qwen downtime is logged and does not prevent a later retry."""
         self.start()
         with mock.patch.object(
             backend, "classify_emotion",
@@ -144,6 +156,7 @@ class BackendWorkflowTests(unittest.TestCase):
         backend.complete_scenario(self.event())
 
     def test_no_speech_recognized_is_logged(self):
+        """An empty Whisper transcript returns 422 and records the issue."""
         self.start()
         with mock.patch.object(
             backend.whisper_model, "transcribe",
@@ -159,6 +172,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(state["status"], "in_progress")
 
     def test_transcription_exception_is_logged(self):
+        """A Whisper exception returns 500 and leaves a recoverable scenario."""
         self.start()
         with mock.patch.object(
             backend.whisper_model, "transcribe",
@@ -171,6 +185,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(state["issues"][0]["reason"], "transcription_failed")
 
     def test_camera_first_then_audio(self):
+        """An image uploaded before the response must still link to that response."""
         self.start()
         frame = asyncio.run(
             backend.upload_session_frame(
@@ -201,6 +216,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertIn("audio_file", audio["saved_result"])
 
     def test_audio_first_then_camera(self):
+        """An image uploaded after the response must also link correctly."""
         self.start()
         with (
             mock.patch.object(
@@ -224,6 +240,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(result["face_image_files"], [frame["image_file"]])
 
     def test_end_early_is_idempotent_and_blocks_new_work(self):
+        """Ending twice preserves the end time and rejects new scenarios."""
         self.start(1)
         self.recovery()
         first = backend.end_session(
@@ -241,6 +258,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
 
     def test_all_scenarios_skipped_are_reported_separately(self):
+        """Skipped scenarios are not counted as answered questions."""
         for scenario in (1, 2, 3, 4):
             self.start(scenario)
             self.recovery(scenario_id=scenario)
@@ -253,6 +271,7 @@ class BackendWorkflowTests(unittest.TestCase):
 
 
     def test_real_facial_result_is_saved_and_used_by_report(self):
+        """Real CV output is recorded once and included in the report."""
         self.start(1)
         frame = asyncio.run(backend.upload_session_frame(
             session_id=self.session_id, scenario_id=1, frame=sample_image()
@@ -280,6 +299,7 @@ class BackendWorkflowTests(unittest.TestCase):
         )
 
     def test_facial_evaluation_requires_a_saved_response_and_frame(self):
+        """Facial analysis needs both a saved answer and camera frame."""
         self.start(1)
         with self.assertRaises(HTTPException) as missing_answer:
             backend.evaluate_facial_frame(self.event(1))
@@ -291,6 +311,7 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(missing_frame.exception.status_code, 404)
 
     def test_no_face_does_not_create_a_real_observation(self):
+        """A frame with no detected face must not create model statistics."""
         self.start(1)
         asyncio.run(backend.upload_session_frame(
             session_id=self.session_id, scenario_id=1, frame=sample_image()
@@ -309,6 +330,7 @@ class BackendWorkflowTests(unittest.TestCase):
         )
 
     def test_mock_observation_is_excluded_from_real_report(self):
+        """Manual/mock face results remain separate from real CV metrics."""
         self.start(1)
         self.submit(1)
         observation = backend.save_facial_result(
@@ -329,7 +351,9 @@ class BackendWorkflowTests(unittest.TestCase):
 
 
 class FacialClassifierTests(unittest.TestCase):
+    """Unit tests for RMN normalization and router registration."""
     def test_normalizes_rmn_output_and_rejects_missing_or_multiple_faces(self):
+        """Normalize valid RMN output, and reject ambiguous/invalid detections."""
         from backend.facial_classifier import (
             FacialInferenceError, normalize_detections
         )
@@ -347,6 +371,7 @@ class FacialClassifierTests(unittest.TestCase):
             normalize_detections([{"emo_label": "happy", "emo_proba": 1.5}])
 
     def test_audio_and_vision_routes_keep_original_api_paths(self):
+        """Protect legacy endpoints and callable aliases after modularization."""
         route_counts = {}
         for route in backend.app.routes:
             for method in getattr(route, "methods", []):
@@ -363,6 +388,16 @@ class FacialClassifierTests(unittest.TestCase):
             ("POST", "/api/camera/session-frame"),
             ("POST", "/api/facial/evaluate"),
             ("POST", "/api/facial/result"),
+            ("POST", "/api/session/start"),
+            ("POST", "/api/session/end"),
+            ("GET", "/api/scenario/next"),
+            ("POST", "/api/scenario/start"),
+            ("POST", "/api/scenario/complete"),
+            ("POST", "/api/scenario/recovery"),
+            ("POST", "/api/response/submit"),
+            ("GET", "/api/session/{session_id}"),
+            ("GET", "/api/session/{session_id}/report"),
+            ("GET", "/api/session/{session_id}/report/view"),
         ]
         for method, path in expected:
             self.assertEqual(route_counts.get((method, path)), 1, path)
@@ -374,7 +409,9 @@ class FacialClassifierTests(unittest.TestCase):
 
 
 class TransferTests(unittest.TestCase):
+    """Unit tests for the session-aware transfer CLI."""
     def test_default_robot_audio_matches_choregraphe(self):
+        """Keep the transfer script's audio path aligned with Choregraphe."""
         self.assertEqual(nao_transfer.DEFAULT_NAO_AUDIO,
                          "/home/nao/response.wav")
 
@@ -383,6 +420,7 @@ class TransferTests(unittest.TestCase):
     def test_file_uploads_use_matching_session_and_scenario(
         self, mock_get, mock_post
     ):
+        """Audio and images must be uploaded with consistent scenario IDs."""
         with tempfile.TemporaryDirectory() as folder:
             wav = Path(folder) / "response.wav"
             jpg = Path(folder) / "face.jpg"
@@ -409,6 +447,7 @@ class TransferTests(unittest.TestCase):
     @mock.patch.object(nao_transfer.requests, "post")
     @mock.patch.object(nao_transfer.requests, "get")
     def test_mismatched_scenario_is_rejected(self, mock_get, mock_post):
+        """Do not transfer files to a different active scenario."""
         mock_get.return_value.json.return_value = {
             "session_status": "active", "active_scenario_id": 3
         }
