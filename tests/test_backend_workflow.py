@@ -346,6 +346,32 @@ class FacialClassifierTests(unittest.TestCase):
         with self.assertRaises(FacialInferenceError):
             normalize_detections([{"emo_label": "happy", "emo_proba": 1.5}])
 
+    def test_audio_and_vision_routes_keep_original_api_paths(self):
+        route_counts = {}
+        for route in backend.app.routes:
+            for method in getattr(route, "methods", []):
+                route_counts[(method, route.path)] = (
+                    route_counts.get((method, route.path), 0) + 1
+                )
+
+        expected = [
+            ("POST", "/api/audio/upload"),
+            ("POST", "/api/audio/capture"),
+            ("POST", "/api/audio/evaluate"),
+            ("POST", "/api/camera/frame"),
+            ("POST", "/api/camera/raw-frame"),
+            ("POST", "/api/camera/session-frame"),
+            ("POST", "/api/facial/evaluate"),
+            ("POST", "/api/facial/result"),
+        ]
+        for method, path in expected:
+            self.assertEqual(route_counts.get((method, path)), 1, path)
+
+        from backend import audio, vision
+        self.assertIs(backend.evaluate_audio, audio.evaluate_audio)
+        self.assertIs(backend.upload_session_frame, vision.upload_session_frame)
+        self.assertIs(backend.evaluate_facial_frame, vision.evaluate_facial_frame)
+
 
 class TransferTests(unittest.TestCase):
     def test_default_robot_audio_matches_choregraphe(self):
