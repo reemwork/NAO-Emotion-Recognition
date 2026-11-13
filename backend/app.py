@@ -1,26 +1,15 @@
-﻿import glob
-import json
-import os
-import re
-import subprocess
+﻿import json
 from collections import Counter
 from datetime import datetime, timezone
 from html import escape
-from io import BytesIO
 from pathlib import Path
-from typing import Literal
 from uuid import uuid4
 
 import requests
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from PIL import Image
-from pydantic import BaseModel, Field
 
 from backend.emotion_classifier import classify_emotion
-from backend.facial_classifier import FacialInferenceError, classify_facial_frame
-from backend.transcribe_audio import model as whisper_model
-from backend.transcribe_audio import transcribe_audio
 from backend.schemas import (
     ChildResponse, ScenarioEvent, SessionEnd, ScenarioRecovery, FacialResult
 )
@@ -748,6 +737,9 @@ app.include_router(audio.router)
 app.include_router(vision.router)
 
 # Keep public callable names for existing scripts and offline tests.
+whisper_model = audio.whisper_model
+transcribe_audio = audio.transcribe_audio
+classify_facial_frame = vision.classify_facial_frame
 upload_nao_audio = audio.upload_nao_audio
 capture_nao_audio = audio.capture_nao_audio
 evaluate_audio = audio.evaluate_audio
