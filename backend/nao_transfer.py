@@ -109,7 +109,7 @@ def download_from_nao(nao_ip, remote_path, local_path):
 
 
 def main():
-      """Parse CLI arguments and transfer the specified audio/images to an active scenario."""
+    """Parse CLI arguments and transfer the specified audio/images to an active scenario."""
     parser = argparse.ArgumentParser(
         description="Transfer NAO data to a specific session/scenario."
     )
