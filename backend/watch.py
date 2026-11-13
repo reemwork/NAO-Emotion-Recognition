@@ -28,7 +28,7 @@ downloaded_images = set(os.listdir(LOCAL_IMAGES))
 
 
 def get_next_audio_number():
-      """Find the next unused sequential WAV number in the local audio folder."""
+    """Find the next unused sequential WAV number in the local audio folder."""
     files = glob.glob(os.path.join(LOCAL_AUDIO, "response_*.wav"))
 
     numbers = []
@@ -46,7 +46,7 @@ def get_next_audio_number():
 
 
 def get_audio_mtime():
-      """Ask the robot for its latest audio-file modification time over SSH."""
+    """Ask the robot for its latest audio-file modification time over SSH."""
     result = subprocess.run(
         [
             "ssh",
