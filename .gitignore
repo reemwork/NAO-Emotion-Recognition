@@ -24,3 +24,6 @@ data/session_frames/
 
 # Scenario images - local until usage rights are verified
 data/scenario_images/
+
+# Locally generated MVP session reports (may contain private transcripts)
+data/mvp_runs/
