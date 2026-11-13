@@ -14,7 +14,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from PIL import Image
 
-from backend.facial_classifier import FacialInferenceError
+from backend.facial_classifier import FacialInferenceError, classify_facial_frame
 from backend.schemas import ScenarioEvent, FacialResult
 
 router = APIRouter(tags=["Camera / Computer Vision"])
