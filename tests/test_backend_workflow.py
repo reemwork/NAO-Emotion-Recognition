@@ -252,6 +252,101 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(ended["skipped_scenarios"], 4)
 
 
+    def test_real_facial_result_is_saved_and_used_by_report(self):
+        self.start(1)
+        frame = asyncio.run(backend.upload_session_frame(
+            session_id=self.session_id, scenario_id=1, frame=sample_image()
+        ))
+        self.submit(1)
+        with mock.patch.object(
+            backend, "classify_facial_frame",
+            return_value={"dominant_emotion": "Happy", "confidence": 0.91}
+        ) as inference:
+            first = backend.evaluate_facial_frame(self.event(1))
+            again = backend.evaluate_facial_frame(self.event(1))
+        self.assertEqual(inference.call_count, 1)
+        self.assertFalse(first["already_evaluated"])
+        self.assertTrue(again["already_evaluated"])
+        self.assertEqual(first["facial_result"]["source"], "resmaskingnet")
+        self.assertEqual(first["facial_result"]["image_file"], frame["image_file"])
+        self.assertEqual(
+            len(backend.sessions[self.session_id]["results"][0]["facial_observations"]), 1
+        )
+        report = backend.generate_session_report(self.session_id)
+        self.assertEqual(report["facial_analysis"]["model_observations"], 1)
+        self.assertEqual(report["facial_analysis"]["most_frequent_expression"], "Happy")
+        self.assertEqual(
+            report["scenario_details"][0]["verbal_facial_comparison"], "Agreement"
+        )
+
+    def test_facial_evaluation_requires_a_saved_response_and_frame(self):
+        self.start(1)
+        with self.assertRaises(HTTPException) as missing_answer:
+            backend.evaluate_facial_frame(self.event(1))
+        self.assertEqual(missing_answer.exception.status_code, 409)
+
+        self.submit(1)
+        with self.assertRaises(HTTPException) as missing_frame:
+            backend.evaluate_facial_frame(self.event(1))
+        self.assertEqual(missing_frame.exception.status_code, 404)
+
+    def test_no_face_does_not_create_a_real_observation(self):
+        self.start(1)
+        asyncio.run(backend.upload_session_frame(
+            session_id=self.session_id, scenario_id=1, frame=sample_image()
+        ))
+        self.submit(1)
+        with mock.patch.object(
+            backend, "classify_facial_frame", return_value=None
+        ):
+            with self.assertRaises(HTTPException) as error:
+                backend.evaluate_facial_frame(self.event(1))
+        self.assertEqual(error.exception.status_code, 422)
+        self.assertEqual(
+            backend.generate_session_report(self.session_id)["facial_analysis"][
+                "model_observations"
+            ], 0
+        )
+
+    def test_mock_observation_is_excluded_from_real_report(self):
+        self.start(1)
+        self.submit(1)
+        observation = backend.save_facial_result(
+            backend.FacialResult(
+                session_id=self.session_id,
+                scenario_id=1,
+                dominant_emotion="Happy",
+                confidence=0.90
+            )
+        )
+        self.assertEqual(observation["facial_result"]["source"], "mock")
+        report = backend.generate_session_report(self.session_id)
+        self.assertEqual(report["facial_analysis"]["model_observations"], 0)
+        self.assertEqual(report["facial_analysis"]["mock_observations_excluded"], 1)
+        self.assertEqual(
+            report["scenario_details"][0]["verbal_facial_comparison"], "Unavailable"
+        )
+
+
+class FacialClassifierTests(unittest.TestCase):
+    def test_normalizes_rmn_output_and_rejects_missing_or_multiple_faces(self):
+        from backend.facial_classifier import (
+            FacialInferenceError, normalize_detections
+        )
+        self.assertEqual(
+            normalize_detections([{"emo_label": "happy", "emo_proba": 0.87}]),
+            {"dominant_emotion": "Happy", "confidence": 0.87}
+        )
+        self.assertIsNone(normalize_detections([]))
+        with self.assertRaises(FacialInferenceError):
+            normalize_detections([
+                {"emo_label": "happy", "emo_proba": 0.9},
+                {"emo_label": "sad", "emo_proba": 0.8}
+            ])
+        with self.assertRaises(FacialInferenceError):
+            normalize_detections([{"emo_label": "happy", "emo_proba": 1.5}])
+
+
 class TransferTests(unittest.TestCase):
     def test_default_robot_audio_matches_choregraphe(self):
         self.assertEqual(nao_transfer.DEFAULT_NAO_AUDIO,
