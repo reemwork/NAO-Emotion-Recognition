@@ -18,6 +18,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from backend.emotion_classifier import classify_emotion
+from backend.facial_classifier import FacialInferenceError, classify_facial_frame
 from backend.transcribe_audio import model as whisper_model
 from backend.transcribe_audio import transcribe_audio
 
@@ -901,6 +902,94 @@ async def upload_session_frame(
         "total_frames": len(frames),
         "linked_to_response": result is not None,
         "message": "Face image saved successfully."
+    }
+
+
+@app.post("/api/facial/evaluate")
+def evaluate_facial_frame(data: ScenarioEvent):
+    """Run ResMaskingNet on the latest frame in the active scenario.
+
+    This route creates a real model observation; /api/facial/result remains a
+    separate mock-only endpoint for tests and manual prototype demonstrations.
+    """
+    session = sessions.get(data.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if session.get("status") != "active":
+        raise HTTPException(status_code=409, detail="Session has already ended.")
+    if session.get("active_scenario_id") != data.scenario_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Start the requested scenario before facial evaluation."
+        )
+
+    result = next(
+        (item for item in session["results"]
+         if item["scenario_id"] == data.scenario_id),
+        None
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Submit the verbal response before facial evaluation."
+        )
+
+    frames = session.get("captured_frames", {}).get(str(data.scenario_id), [])
+    if not frames:
+        raise HTTPException(
+            status_code=404,
+            detail="No captured facial frame for this scenario."
+        )
+
+    image_file = frames[-1]
+    for observation in result.get("facial_observations", []):
+        if (
+            observation.get("source") == "resmaskingnet"
+            and observation.get("image_file") == image_file
+        ):
+            return {
+                "status": "success",
+                "already_evaluated": True,
+                "session_id": data.session_id,
+                "scenario_id": data.scenario_id,
+                "facial_result": observation
+            }
+
+    image_path = (ROOT / image_file).resolve()
+    if not image_path.is_relative_to(ROOT.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid stored frame path.")
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Stored frame not found.")
+
+    try:
+        prediction = classify_facial_frame(image_path)
+    except FacialInferenceError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    if prediction is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No face was detected in the captured frame."
+        )
+
+    observation = {
+        "observation_id": str(uuid4()),
+        "dominant_emotion": prediction["dominant_emotion"],
+        "confidence": prediction["confidence"],
+        "image_file": image_file,
+        "source": "resmaskingnet",
+        "recorded_at": datetime.now(timezone.utc).isoformat()
+    }
+    result.setdefault("facial_observations", []).append(observation)
+    save_sessions()
+
+    return {
+        "status": "success",
+        "already_evaluated": False,
+        "session_id": data.session_id,
+        "scenario_id": data.scenario_id,
+        "facial_result": observation,
+        "total_observations": len(result["facial_observations"])
     }
 
 

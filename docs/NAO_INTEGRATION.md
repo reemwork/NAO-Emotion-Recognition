@@ -108,6 +108,62 @@ Tests mock Whisper, Qwen, file uploads, and the network. The
 obsolete manual laptop-camera and laptop-microphone tests were removed;
 keep `tests/test_backend_workflow.py` for regression checks.
 
+## Optional local ResMaskingNet facial evaluation
+
+This feature is isolated from the teammate's CV experimentation: it uses the
+public `rmn` inference package as an optional local integration adapter.
+The server does **not** load ResMaskingNet at startup. Install it in the
+active project virtual environment only when testing this integration:
+
+```powershell
+python -m pip install rmn
+```
+
+The model runs on the external PC. On first use it may need to fetch model
+weights; do not confuse a first-time weight download with uploading a
+participant's image. Captured frames stay in the local session directory.
+
+For a **single active scenario**, use Swagger at
+http://127.0.0.1:8000/docs in this order:
+
+1. `POST /api/session/start`
+2. `POST /api/scenario/start` with the new session ID and scenario ID
+3. `POST /api/camera/session-frame` with the same IDs and a local face image
+4. `POST /api/response/submit` (text) **or** `POST /api/audio/evaluate` (WAV)
+5. `POST /api/facial/evaluate` with:
+
+```json
+{
+  "session_id": "PASTE_SESSION_ID",
+  "scenario_id": 1
+}
+```
+
+6. `GET /api/session/{session_id}/report`
+7. `POST /api/scenario/complete` and continue the session as usual
+
+The facial endpoint classifies the **latest** captured frame for that
+scenario using the real `rmn.RMN` model. It records the facial label,
+confidence from 0 to 1, image path, and `source=resmaskingnet`. Repeating
+the call for the same frame reuses the stored observation instead of
+counting it twice. A new frame can produce a new observation.
+
+The model recognizes seven facial expression categories; the displayed
+image scenarios and verbal correctness evaluation still use four categories.
+Facial expressions are descriptive observations, **not** proof of the
+participant's actual emotions or of answer correctness.
+
+If no face is detected, the endpoint responds 422; if several faces are
+detected, or the model/dependencies fail, the endpoint responds 503. These
+failures do not write false facial observations. Only
+`source=resmaskingnet` observations count as real CV outputs in the report.
+`POST /api/facial/result` is retained for **mock-only** inputs and is
+excluded from real facial statistics.
+
+The online/on-device result must still be tested with the actual camera
+images and the intended CV implementation before claiming the full MVP
+is validated.
+
 ## Still pending
 
 - NAO-side automatic event signals from the *final* Choregraphe scenario
