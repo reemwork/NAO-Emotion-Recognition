@@ -400,7 +400,7 @@ class FacialClassifierTests(unittest.TestCase):
             ("GET", "/api/session/{session_id}/report/view"),
         ]
         for method, path in expected:
-            self.assertEqual(route_counts.get((method, path)), 1, path)
+            self.assertEqual(route_counts.get((method, path)), 1, f"{path}; registered: {list(route_counts)}")
 
         from backend import audio, vision
         self.assertIs(backend.evaluate_audio, audio.evaluate_audio)
