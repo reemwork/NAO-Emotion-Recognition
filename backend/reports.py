@@ -5,7 +5,7 @@ summary of facial observations; it makes no clinical assessment.
 """
 from collections import Counter
 from html import escape
-from importlib import import_module
+import backend
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
@@ -13,7 +13,9 @@ router = APIRouter(tags=["Session Reports"])
 
 def _backend():
     """Look up the same sessions and report implementation used by the API."""
-    return import_module("backend.app")
+    # Use the already loaded package module (no recursive re-import).
+    # This also preserves monkeypatched backend.app aliases in offline tests.
+    return backend.app
 
 @router.get("/api/session/{session_id}/report")
 def generate_session_report(session_id: str):
