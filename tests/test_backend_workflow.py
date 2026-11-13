@@ -375,12 +375,15 @@ class FacialClassifierTests(unittest.TestCase):
 
     def test_audio_and_vision_routes_keep_original_api_paths(self):
         """Protect legacy endpoints and callable aliases after modularization."""
+        # Use the public OpenAPI schema instead of FastAPI's internal
+        # app.routes representation: newer versions keep included routers
+        # as nested objects that do not expose a direct .path attribute.
+        openapi_paths = backend.app.openapi().get("paths", {})
         route_counts = {}
-        for route in backend.app.routes:
-            for method in getattr(route, "methods", []):
-                route_counts[(method, route.path)] = (
-                    route_counts.get((method, route.path), 0) + 1
-                )
+        for path, operations in openapi_paths.items():
+            for method in operations:
+                if method.lower() in {"get", "post", "put", "patch", "delete"}:
+                    route_counts[(method.upper(), path)] = 1
 
         expected = [
             ("POST", "/api/audio/upload"),
@@ -403,17 +406,9 @@ class FacialClassifierTests(unittest.TestCase):
             ("GET", "/api/session/{session_id}/report/view"),
         ]
         for method, path in expected:
-            from backend import audio, vision, sessions_api, responses, reports
-            sources = {
-                "audio": [r.path for r in audio.router.routes],
-                "vision": [r.path for r in vision.router.routes],
-                "sessions": [r.path for r in sessions_api.router.routes],
-                "responses": [r.path for r in responses.router.routes],
-                "reports": [r.path for r in reports.router.routes],
-            }
             self.assertEqual(
                 route_counts.get((method, path)), 1,
-                f"{path}; registered: {list(route_counts)}; source routers: {sources}"
+                f"{method} {path}; OpenAPI paths: {list(openapi_paths)}"
             )
 
         from backend import audio, vision
