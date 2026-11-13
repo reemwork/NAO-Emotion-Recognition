@@ -7,7 +7,7 @@ while importing this module.
 
 import os
 from datetime import datetime, timezone
-from importlib import import_module
+import backend
 from io import BytesIO
 from uuid import uuid4
 
@@ -22,7 +22,9 @@ router = APIRouter(tags=["Camera / Computer Vision"])
 
 def _backend():
     """Access shared session state lazily; avoids import cycles."""
-    return import_module("backend.app")
+    # Use the already loaded package module (no recursive re-import).
+    # This also preserves monkeypatched backend.app aliases in offline tests.
+    return backend.app
 
 
 @router.post("/api/camera/frame")
