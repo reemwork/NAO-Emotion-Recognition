@@ -24,6 +24,9 @@ class FacialInferenceError(RuntimeError):
 
 @lru_cache(maxsize=1)
 def _get_model():
+    """Load and cache one local RMN model instance on the first inference.
+    
+    Lazy initialization avoids loading large model weights at API startup."""
     try:
         from rmn import RMN
     except ImportError as error:
@@ -49,6 +52,8 @@ def normalize_detections(detections):
         raise FacialInferenceError("Invalid ResMaskingNet detection format.")
     if not detections:
         return None
+    # One participant face per frame: never arbitrarily choose someone
+    # when two or more people are visible.
     if len(detections) != 1:
         raise FacialInferenceError(
             "Multiple faces detected; a single participant face is required."
@@ -89,6 +94,7 @@ def classify_facial_frame(image_path):
             "OpenCV is required. Run: python -m pip install opencv-python"
         ) from error
 
+    # OpenCV reads an image into the format expected by RMN.
     frame = cv2.imread(str(image_path))
     if frame is None:
         raise FacialInferenceError("Saved facial frame could not be opened.")
