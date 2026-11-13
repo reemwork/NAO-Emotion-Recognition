@@ -26,6 +26,10 @@ def _backend():
 
 @router.post("/api/audio/upload")
 async def upload_nao_audio(audio: UploadFile = File(...)):
+    """Accept a standalone WAV upload, save it, and run the legacy STT helper.
+    
+    This endpoint is not session-linked. Unlike /api/audio/evaluate,
+    the helper in transcribe_audio.py currently requests Arabic STT."""
     transcribe_audio = _backend().transcribe_audio
     folder = "data/nao_audio"
     os.makedirs(folder, exist_ok=True)
@@ -58,6 +62,11 @@ async def upload_nao_audio(audio: UploadFile = File(...)):
 
 @router.post("/api/audio/capture")
 def capture_nao_audio():
+    """Copy the robot's pre-recorded WAV to the local computer via SCP.
+    
+    The robot must already have finished recording and SSH access must work.
+    This legacy endpoint does not attach the recording to a session."""
+    # These are legacy fixed paths; confirm the current NAO behavior before use.
     nao_ip = "169.254.247.199"
     remote_audio = "/home/nao/recordings/microphones/response.wav"
 
@@ -115,6 +124,11 @@ def evaluate_audio(
     scenario_id: int = Form(...),
     audio: UploadFile = File(...)
 ):
+    """Validate session-linked WAV audio, transcribe it, and evaluate its text.
+    
+    The active session/scenario must exist. Whisper uses English in this
+    endpoint; the resulting transcript is passed to the same Qwen-based
+    verbal evaluation as /api/response/submit. Returns the stored result."""
     ctx = _backend()
     sessions = ctx.sessions
     scenarios_db = ctx.scenarios_db
@@ -160,7 +174,8 @@ def evaluate_audio(
             detail="Response already submitted for this scenario."
         )
 
-    # Accept WAV recordings only.
+    # WAV is the only audio format accepted for session-based evaluation.
+    # This request does not fetch audio from NAO; the caller uploads it.
     if not (audio.filename or "").lower().endswith(".wav"):
         raise HTTPException(
             status_code=400,
@@ -190,7 +205,7 @@ def evaluate_audio(
     audio_path = audio_folder / audio_filename
     audio_path.write_bytes(audio_data)
 
-    # Step 1: Speech-to-text using Whisper.
+    # STEP 1 - Whisper converts WAV -> English text; no emotion inference yet.
     try:
         whisper_result = whisper_model.transcribe(
             str(audio_path),
@@ -218,7 +233,8 @@ def evaluate_audio(
             detail="No speech was recognized."
         )
 
-    # Step 2: Reuse the existing Qwen evaluation.
+    # STEP 2 - Reuse the same Qwen classifier and reference-label check
+    # used for a manually submitted transcript.
     try:
         response = submit_response(
             ChildResponse(
@@ -232,7 +248,8 @@ def evaluate_audio(
         audio_path.unlink(missing_ok=True)
         raise
 
-    # Step 3: Link audio to the saved result.
+    # STEP 3 - Attach the recording's relative path to the saved answer.
+    # The report can now trace the text back to its source WAV.
     relative_audio_path = audio_path.relative_to(ROOT)
 
     response["saved_result"]["audio_file"] = (
