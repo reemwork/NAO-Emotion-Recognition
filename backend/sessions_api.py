@@ -5,7 +5,7 @@ All routes use the central session dictionary in backend.app, so audio and
 camera observations refer to the same session and scenario IDs.
 """
 from datetime import datetime, timezone
-from importlib import import_module
+import backend
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from backend.schemas import ScenarioEvent, SessionEnd, ScenarioRecovery
@@ -14,7 +14,9 @@ router = APIRouter(tags=["Sessions / Scenarios"])
 
 def _backend():
     """Resolve central session state only when a request runs."""
-    return import_module("backend.app")
+    # Use the already loaded package module (no recursive re-import).
+    # This also preserves monkeypatched backend.app aliases in offline tests.
+    return backend.app
 
 def record_scenario_issue(session, scenario_id, reason):
     """Record an STT/MLLM failure on the active scenario, without adding a response."""
