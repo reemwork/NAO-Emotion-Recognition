@@ -173,3 +173,34 @@ is validated.
 - Multi-process-safe storage (JSON in-memory session storage is suitable
   only for the current single-process prototype).
 - Authentication and further privacy controls before real participant use.
+
+## Backend file separation
+
+The live HTTP routes are grouped by responsibility. **All public URL paths
+and JSON/form field names remain unchanged.** The feature modules share the
+same `backend.app` session state; moving the routes does not duplicate data.
+
+| File | Responsibility |
+| --- | --- |
+| `backend/app.py` | Session lifecycle, scenarios, verbal correctness, persistence, reports, and router registration |
+| `backend/audio.py` | Audio upload, NAO WAV retrieval, Whisper transcription workflow, audio-to-text submission |
+| `backend/vision.py` | Camera JPEG/raw-frame upload, session-frame storage, facial inference calls, real/mock facial observations |
+| `backend/schemas.py` | Shared FastAPI/Pydantic request models |
+| `backend/transcribe_audio.py` | Unmodified Whisper loader and legacy standalone transcription helper |
+| `backend/facial_classifier.py` | Unmodified optional ResMaskingNet adapter for local inference |
+
+We deliberately did not modify the speech or facial model implementation
+during this restructuring. The legacy exported function names in
+`backend.app` are kept for existing tests and scripts.
+
+To verify the refactor on your PC:
+
+```powershell
+python -m unittest tests.test_backend_workflow -v
+python -m uvicorn backend.app:app --reload
+```
+
+Swagger documentation remains at http://127.0.0.1:8000/docs.
+When you have the CV teammate's definitive inference code/weights,
+review those separately before replacing the optional model adapter.
+
