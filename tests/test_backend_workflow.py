@@ -24,8 +24,11 @@ from PIL import Image
 fake_stt = types.ModuleType("backend.transcribe_audio")
 fake_stt.model = mock.Mock()
 fake_stt.transcribe_audio = mock.Mock(return_value="Mock transcript")
-with mock.patch.dict(sys.modules, {"backend.transcribe_audio": fake_stt}):
-    backend = importlib.import_module("backend.app")
+# Keep the fake module in the test process for the entire test suite.
+# Restoring sys.modules immediately would evict routers created by imports,
+# causing later lazy imports to load real Whisper unexpectedly.
+sys.modules["backend.transcribe_audio"] = fake_stt
+backend = importlib.import_module("backend.app")
 
 from backend import nao_transfer
 
@@ -400,17 +403,9 @@ class FacialClassifierTests(unittest.TestCase):
             ("GET", "/api/session/{session_id}/report/view"),
         ]
         for method, path in expected:
-            from backend import audio, vision, sessions_api, responses, reports
-            sources = {
-                "audio": [r.path for r in audio.router.routes],
-                "vision": [r.path for r in vision.router.routes],
-                "sessions": [r.path for r in sessions_api.router.routes],
-                "responses": [r.path for r in responses.router.routes],
-                "reports": [r.path for r in reports.router.routes],
-            }
             self.assertEqual(
                 route_counts.get((method, path)), 1,
-                f"{path}; registered: {list(route_counts)}; source routers: {sources}"
+                f"{path}; registered: {list(route_counts)}"
             )
 
         from backend import audio, vision
