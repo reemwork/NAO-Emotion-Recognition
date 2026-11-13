@@ -28,6 +28,8 @@ def read_root():
 # Register existing URL paths without changing the HTTP API contract.
 for feature in (sessions_api, responses, reports, audio, vision):
     app.include_router(feature.router)
+# DEBUG: check whether routes were registered during module initialization.
+print("ROUTES_AT_APP_IMPORT", [route.path for route in app.routes])
 
 # Keep earlier callable names for scripts and existing offline tests.
 record_scenario_issue = sessions_api.record_scenario_issue
