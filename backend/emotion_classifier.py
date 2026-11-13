@@ -16,12 +16,12 @@ LABELS = ["Happy", "Sad", "Angry", "Neutral", "Unclear"]
 
 
 def classify_emotion(spoken_text: str) -> str:
-    if not spoken_text or not spoken_text.strip():
-    """Classify a spoken-text description into one of five fixed emotion labels.
+    """Map one spoken-text response to Happy/Sad/Angry/Neutral/Unclear.
 
-    Sends ONLY the supplied text to local Ollama/Qwen and requires JSON with
-    one valid label. This function does not see the displayed scenario
-    image or determine answer correctness. Raises on network/output errors."""
+    Send only this text to local Qwen, and verify its one-label JSON
+    output. Reference-label correctness is handled in responses.py.
+    """
+    if not spoken_text or not spoken_text.strip():
         raise ValueError("The spoken response cannot be empty.")
 
     # Detailed decision rules distinguish a genuinely neutral expression
