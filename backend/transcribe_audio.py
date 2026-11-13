@@ -1,12 +1,23 @@
+"""Legacy Whisper-small transcription helper for standalone NAO WAV files.
+
+Loads the model once when imported. The current legacy path transcribes
+Arabic; the session-based /api/audio/evaluate route uses English separately.
+"""
+
 import whisper
 import glob
 import os
 import re
 
+# Load once and reuse for multiple requests; this may allocate model RAM.
 model = whisper.load_model("small")
 
 
 def transcribe_audio(file_path):
+      """Transcribe a saved WAV file with the shared Whisper-small model.
+      
+      This standalone/legacy helper currently sets language='ar' (Arabic).
+      The session-aware /api/audio/evaluate endpoint separately uses English."""
     result = model.transcribe(
         file_path,
         language="ar"
@@ -29,6 +40,7 @@ if __name__ == "__main__":
 
 
     def get_number(file_path):
+          """Extract the numeric index from a response_<number>.wav filename."""
         filename = os.path.basename(file_path)
 
         match = re.search(
