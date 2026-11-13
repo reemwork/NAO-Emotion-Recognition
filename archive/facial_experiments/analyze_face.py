@@ -46,7 +46,7 @@ try:
         print(f"- {emotion}: {score:.2f}%")
 
     # Save the full per-class probabilities for the original experiment.
-    text_file = os.path.splitext(image_name)[0] + ".txt
+    text_file = os.path.splitext(image_name)[0] + ".txt"
 
     with open(text_file, "w", encoding="utf-8") as f:
         f.write("========== FACIAL EMOTION ANALYSIS ==========\n")
