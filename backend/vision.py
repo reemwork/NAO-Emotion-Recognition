@@ -27,6 +27,10 @@ def _backend():
 
 @router.post("/api/camera/frame")
 async def upload_camera_frame(frame: UploadFile = File(...)):
+    """Store a standalone uploaded camera frame in data/nao_frames.
+    
+    This lightweight/legacy endpoint does not associate an image with a
+    specific training session."""
     folder = "data/nao_frames"
     os.makedirs(folder, exist_ok=True)
 
@@ -58,6 +62,10 @@ async def upload_raw_camera_frame(
     height: int = Form(...),
     frame: UploadFile = File(...)
 ):
+    """Convert raw RGB bytes from NAO to a local JPEG image.
+    
+    width * height * 3 must match the byte count because every RGB pixel
+    contains three color channels. This is not a model inference endpoint."""
     folder = "data/nao_frames"
     os.makedirs(folder, exist_ok=True)
 
@@ -106,6 +114,10 @@ async def upload_session_frame(
     scenario_id: int = Form(...),
     frame: UploadFile = File(...)
 ):
+    """Validate and save an image for one active session and scenario.
+    
+    Frames are accepted before or after the corresponding verbal response.
+    When an answer is already saved, its image references are updated."""
     ctx = _backend()
     sessions = ctx.sessions
     scenarios_db = ctx.scenarios_db
@@ -137,7 +149,8 @@ async def upload_session_frame(
             detail="Scenario not found."
         )
 
-    # Step 3: Read and validate the image.
+    # STEP 3 - Validate the uploaded image before saving it to disk.
+    # Byte and pixel limits protect against oversized/unreadable input.
     contents = await frame.read()
 
     if not contents or len(contents) > 10 * 1024 * 1024:
@@ -170,7 +183,7 @@ async def upload_session_frame(
 
     image.save(image_path, format="JPEG", quality=90)
 
-    # Step 5: Store frames even when audio has not arrived yet.
+    # STEP 5 - Track frames immediately: the audio response can arrive later.
     relative_path = image_path.relative_to(ROOT).as_posix()
     captured_frames = session.setdefault("captured_frames", {})
     frames = captured_frames.setdefault(str(scenario_id), [])
@@ -245,6 +258,7 @@ def evaluate_facial_frame(data: ScenarioEvent):
         )
 
     image_file = frames[-1]
+    # Avoid charging the same exact frame twice to the session/report.
     for observation in result.get("facial_observations", []):
         if (
             observation.get("source") == "resmaskingnet"
@@ -269,6 +283,7 @@ def evaluate_facial_frame(data: ScenarioEvent):
     except FacialInferenceError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
+    # A missing face is NOT an emotion result; avoid storing a false reading.
     if prediction is None:
         raise HTTPException(
             status_code=422,
@@ -298,6 +313,10 @@ def evaluate_facial_frame(data: ScenarioEvent):
 
 @router.post("/api/facial/result")
 def save_facial_result(data: FacialResult):
+    """Store a manually provided/mock facial result for prototype tests.
+    
+    Observations saved here are deliberately marked source='mock' so the
+    report can exclude them from real ResMaskingNet statistics."""
 
     ctx = _backend()
     sessions = ctx.sessions
@@ -333,6 +352,7 @@ def save_facial_result(data: FacialResult):
             detail="No saved response for this scenario."
         )
 
+    # This is the mock-only endpoint; real model inference has its own route.
     # Store a facial observation
     observation = {
         "observation_id": str(uuid4()),
