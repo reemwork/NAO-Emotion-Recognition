@@ -1,9 +1,17 @@
+"""ARCHIVED DeepFace experiment (not the selected production CV pipeline).
+
+Reads the newest local NAO JPG, performs a one-off DeepFace emotion
+analysis, and writes all scores to a neighboring TXT file. The selected
+project CV baseline is ResMaskingNet; keep this for historical comparison.
+"""
+
 import os
 import glob
 from deepface import DeepFace
 
 image_folder = "data/nao_frames"
 
+# Only analyze the newest saved image; this script is not session-aware.
 images = glob.glob(os.path.join(image_folder, "*.jpg"))
 
 if not images:
@@ -21,6 +29,7 @@ try:
         actions=["emotion"]
     )
 
+    # Different DeepFace versions may return one dictionary or a list.
     if isinstance(results, list):
         result = results[0]
     else:
@@ -36,6 +45,7 @@ try:
     for emotion, score in result["emotion"].items():
         print(f"- {emotion}: {score:.2f}%")
 
+    # Save the full per-class probabilities for the original experiment.
     text_file = os.path.splitext(image_name)[0] + ".txt"
 
     with open(text_file, "w", encoding="utf-8") as f:

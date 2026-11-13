@@ -53,11 +53,14 @@ def upload_captures(
     if audio_path is None and not image_paths:
         raise ValueError("Provide an audio file or at least one face image.")
 
+    # Refuse stale/mismatched IDs before uploading any data.
     fetch_active_scenario(session_id, scenario_id, api_url)
     base = api_url.rstrip("/")
     fields = {"session_id": session_id, "scenario_id": str(scenario_id)}
     uploaded = {"images": [], "audio": None}
 
+    # Upload camera frames before evaluating audio, so both capture orders
+    # are supported by the backend's session linking logic.
     for name in image_paths:
         image = Path(name)
         if image.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
@@ -106,6 +109,7 @@ def download_from_nao(nao_ip, remote_path, local_path):
 
 
 def main():
+    """Parse CLI arguments and transfer the specified audio/images to an active scenario."""
     parser = argparse.ArgumentParser(
         description="Transfer NAO data to a specific session/scenario."
     )

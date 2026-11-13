@@ -1,3 +1,9 @@
+"""Legacy continuous watcher for NAO camera images and microphone audio.
+
+Run this script explicitly; importing it starts its polling loop.
+For session-aware transfers, prefer backend.nao_transfer instead.
+"""
+
 import os
 import time
 import subprocess
@@ -22,6 +28,7 @@ downloaded_images = set(os.listdir(LOCAL_IMAGES))
 
 
 def get_next_audio_number():
+    """Find the next unused sequential WAV number in the local audio folder."""
     files = glob.glob(os.path.join(LOCAL_AUDIO, "response_*.wav"))
 
     numbers = []
@@ -39,6 +46,7 @@ def get_next_audio_number():
 
 
 def get_audio_mtime():
+    """Ask the robot for its latest audio-file modification time over SSH."""
     result = subprocess.run(
         [
             "ssh",
@@ -60,6 +68,8 @@ print("Current audio:", last_audio_mtime)
 print()
 
 
+# Poll continuously and download only files that appear new.
+# This watcher cannot associate captures with a specific scenario.
 while True:
     try:
 

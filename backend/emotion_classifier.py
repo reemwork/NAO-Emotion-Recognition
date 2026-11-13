@@ -1,7 +1,14 @@
+"""Text-only verbal emotion classification using local Ollama/Qwen.
+
+This module does not evaluate facial expressions, access an image, or score
+correctness. It only maps one text response to an emotion description label.
+"""
 
 import json
 import requests
 
+# This vision-capable model is intentionally used in TEXT-ONLY mode here.
+# Supplying the displayed picture would leak the expected emotion label.
 MODEL = "qwen2.5vl:3b"
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
 
@@ -9,9 +16,16 @@ LABELS = ["Happy", "Sad", "Angry", "Neutral", "Unclear"]
 
 
 def classify_emotion(spoken_text: str) -> str:
+    """Map one spoken-text response to Happy/Sad/Angry/Neutral/Unclear.
+
+    Send only this text to local Qwen, and verify its one-label JSON
+    output. Reference-label correctness is handled in responses.py.
+    """
     if not spoken_text or not spoken_text.strip():
         raise ValueError("The spoken response cannot be empty.")
 
+    # Detailed decision rules distinguish a genuinely neutral expression
+    # from an answer that does not give enough information ("Unclear").
     prompt = """
 You are an emotion classification system.
 
@@ -71,6 +85,8 @@ Return only the requested JSON object.
 """
 
 
+    # Ollama runs locally; structured output prevents free-form explanations.
+    # temperature=0 favors repeatable, comparable classification outputs.
     response = requests.post(
         OLLAMA_URL,
         json={
@@ -119,6 +135,7 @@ Return only the requested JSON object.
             "Invalid response format from the MLLM."
         ) from error
 
+    # Reject hallucinated labels rather than silently guessing a category.
     if prediction not in LABELS:
         raise RuntimeError(
             f"Invalid emotion label: {prediction}"
