@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 from datetime import datetime
-from importlib import import_module
+import backend
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -21,7 +21,9 @@ router = APIRouter(tags=["Audio / Speech-to-Text"])
 
 def _backend():
     """Access shared session state lazily; avoids import cycles."""
-    return import_module("backend.app")
+    # Use the already loaded package module (no recursive re-import).
+    # This also preserves monkeypatched backend.app aliases in offline tests.
+    return backend.app
 
 
 @router.post("/api/audio/upload")
