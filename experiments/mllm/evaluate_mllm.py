@@ -1,3 +1,10 @@
+"""Standalone MLLM benchmark script (NOT the live session classifier).
+
+Loads predefined text test cases, sends them to the configured local
+Ollama model, measures label agreement/latency, and writes CSV results.
+This script creates image bytes but does NOT include them in the actual
+Ollama request, so its current evaluation call is text-only.
+"""
 
 import json
 import base64
@@ -11,6 +18,7 @@ import requests
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
+# Experimental model choice; the live backend selects Qwen separately.
 MODEL = "gemma3:4b"
 
 LABELS = {"Happy", "Sad", "Angry", "Neutral", "Unclear"}
@@ -33,6 +41,8 @@ for test in test_cases:
     if not image_path.is_file():
         raise FileNotFoundError(f"Missing image: {image_path}")
 
+    # Image is resized/encoded below but not passed in the HTTP payload.
+    # Do not describe this specific test run as image+text inference.
     with Image.open(image_path) as image:
         image = image.convert("RGB")
         image.thumbnail((448, 448))
@@ -60,6 +70,7 @@ Rules:
 Child's response: "{test['response']}"
 """
 
+    # Time each request to compare runtime as well as label agreement.
     start = time.perf_counter()
 
     try:
@@ -126,6 +137,7 @@ Child's response: "{test['response']}"
         flush=True
     )
 
+# Experiment results are separate from clinical or session reports.
 output_file = DATA / "gemma3_4b_text_only_results.csv"
 
 with open(output_file, "w", newline="", encoding="utf-8") as file:
