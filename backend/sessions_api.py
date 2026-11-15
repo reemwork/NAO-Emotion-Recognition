@@ -1,8 +1,14 @@
-"""Session and scenario API.
+"""
+This file manages the training sessions and scenarios.
 
-Owns state transitions: active, completed, completed_with_skips, ended_early.
-All routes use the central session dictionary in backend.app, so audio and
-camera observations refer to the same session and scenario IDs.
+It starts and ends sessions, and keeps track of which scenario
+is currently running.
+
+It also handles what happens when a scenario is completed,
+skipped, or needs to be repeated.
+
+This helps the system keep track of the session progress
+and makes sure each response is linked to the correct scenario.
 """
 from datetime import datetime, timezone
 import backend

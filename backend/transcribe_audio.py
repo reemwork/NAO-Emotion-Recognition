@@ -4,10 +4,11 @@ Loads the model once when imported. The current legacy path transcribes
 Arabic; the session-based /api/audio/evaluate route uses English separately.
 """
 
-import whisper
 import glob
 import os
 import re
+
+import whisper
 
 # Load once and reuse for multiple requests; this may allocate model RAM.
 model = whisper.load_model("small")

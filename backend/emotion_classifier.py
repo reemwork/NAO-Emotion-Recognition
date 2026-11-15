@@ -5,6 +5,7 @@ correctness. It only maps one text response to an emotion description label.
 """
 
 import json
+
 import requests
 
 # This vision-capable model is intentionally used in TEXT-ONLY mode here.

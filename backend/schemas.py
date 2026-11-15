@@ -1,6 +1,13 @@
-"""Shared FastAPI request schemas for sessions, audio, and vision."""
+"""
+This file defines what data the backend needs to receive.
 
+For example, it defines the data needed to start a scenario,
+send an answer, or save a facial expression result.
+
+It helps make sure the data is complete and in the correct format.
+"""
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 

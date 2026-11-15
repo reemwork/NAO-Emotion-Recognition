@@ -1,8 +1,16 @@
-"""Read and persist fixed NAO scenarios and local training sessions.
-
-scenarios.json contains predefined reference labels. sessions.json stores
-local prototype progress and is replaced via a temporary file on save.
 """
+This file handles loading and saving data for NAO training sessions.
+
+It loads the scenarios from scenarios.json, including the image
+and the correct emotion label for each scenario.
+
+It also saves session information in sessions.json, such as
+the responses, results, and progress.
+
+This way, the data is not lost when the backend is restarted.
+"""
+
+
 import json
 from pathlib import Path
 

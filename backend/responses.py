@@ -4,9 +4,10 @@ The MLLM classifies transcribed speech (text only); this module compares the
 predicted label with the scenario's reference label and persists Correct /
 Incorrect / Unclear. Facial expressions remain independent observations.
 """
-import backend
 import requests
 from fastapi import APIRouter, HTTPException
+
+import backend
 from backend.schemas import ChildResponse
 
 router = APIRouter(tags=["Verbal Emotion Evaluation"])

@@ -10,11 +10,13 @@ import os
 import re
 import subprocess
 from datetime import datetime
-import backend
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from backend.transcribe_audio import model as whisper_model, transcribe_audio
+
+import backend
+from backend.transcribe_audio import model as whisper_model
+from backend.transcribe_audio import transcribe_audio
 
 router = APIRouter(tags=["Audio / Speech-to-Text"])
 
