@@ -1,3 +1,9 @@
+"""ARCHIVED one-shot SSH/SCP download of NAO's configured audio WAV.
+
+Finds the next local sequential recording number and downloads a single
+file. Unlike the live session-aware API, it does not store scenario IDs.
+"""
+
 import os
 import glob
 import re
@@ -37,6 +43,7 @@ local_path = os.path.join(
 
 print("Downloading NAO recording...")
 
+# NAO must already contain the WAV; this script does not trigger recording.
 subprocess.run(
     [
         "scp",

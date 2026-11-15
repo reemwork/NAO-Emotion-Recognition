@@ -8,6 +8,12 @@ The project combines **Human-Robot Interaction (HRI), Natural Language Processin
 
 **Status:** In Development — Graduation Project
 
+## Developer documentation
+
+For a file-by-file code walkthrough, endpoint flow, model boundaries and
+contributor guidance, see [Developer Guide](docs/CODE_WALKTHROUGH.md).
+Each Python module also has English function docstrings and targeted comments.
+
 ## 1. Project Overview
 
 The system uses the NAO V6 humanoid robot to conduct interactive emotion-recognition sessions involving four target emotions:

@@ -1,3 +1,10 @@
+"""ARCHIVED continuous NAO WAV watcher; retained for historical reference.
+
+Polls a fixed NAO WAV path over SSH, waits for its file size to stabilize,
+and downloads new recordings with sequential filenames. No session IDs
+are attached; use backend.nao_transfer for session-aware transfers.
+"""
+
 import os
 import time
 import glob
@@ -13,6 +20,7 @@ os.makedirs(LOCAL_AUDIO, exist_ok=True)
 
 
 def get_remote_info():
+    """Read the robot WAV modification time and size using an SSH stat command."""
     result = subprocess.run(
         [
             "ssh",
@@ -34,6 +42,7 @@ def get_remote_info():
 
 
 def get_next_number():
+    """Return the next sequential local response_<number>.wav index."""
     files = glob.glob(
         os.path.join(LOCAL_AUDIO, "response_*.wav")
     )
@@ -55,9 +64,11 @@ def get_next_number():
 
 
 def wait_until_finished():
+    """Wait until three successive size checks show a stable recording."""
     previous_size = None
     stable_count = 0
 
+    # Do not copy a WAV file while NAO is still writing audio data.
     while stable_count < 3:
         info = get_remote_info()
 
@@ -90,6 +101,7 @@ print("Current recording:", last_mtime)
 print()
 
 
+# This loop runs immediately if imported; execute as a script only.
 while True:
     try:
         current_info = get_remote_info()

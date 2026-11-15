@@ -1,3 +1,9 @@
+"""Earlier one-scenario image+text MLLM experiment (NOT production).
+
+Passes the scenario image and a sample response to a local Qwen model.
+The currently selected live classifier, backend.emotion_classifier,
+intentionally receives text ONLY to avoid reference-image leakage.
+"""
 
 import json
 import base64
@@ -32,6 +38,7 @@ Rules:
 Child's response: "{child_response}"
 """
 
+# This prototype DOES pass the image to Ollama for experimental comparison.
 with open(image_path, "rb") as file:
     image_base64 = base64.b64encode(file.read()).decode("utf-8")
 
@@ -65,6 +72,8 @@ prediction = response.json()["message"]["content"].strip()
 
 valid_labels = {"Happy", "Sad", "Angry", "Neutral", "Unclear"}
 
+# Compare the model label against the predefined scenario reference.
+# Unlike the live workflow, this prototype prompt has access to the image.
 if prediction not in valid_labels:
     evaluation = "Invalid Output"
 elif prediction == "Unclear":
