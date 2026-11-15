@@ -1,9 +1,11 @@
+
 """NAO physical robot session coordinator for reemwork/NAO-Emotion-Recognition.
 
 Run from repository root: python run_session.py --nao-ip 169.254.x.x
-Requires NAO Python2 + naoqi available on the robot via SSH and working
+Requires NAO Python 2 + NAOqi available on the robot via SSH and working
 PC FastAPI/Whisper/Ollama. Does not fabricate CV classification results.
 """
+
 import argparse
 import base64
 import json
@@ -12,7 +14,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import webbrowser
 from pathlib import Path
 
@@ -23,6 +24,12 @@ API = "http://127.0.0.1:8000"
 OLLAMA = "http://127.0.0.1:11434"
 MODEL = "qwen2.5vl:3b"
 
+# NAO V6 stores its Python 2 NAOqi bindings outside Python's default path.
+NAO_PYTHON_COMMAND = (
+    'env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages:'
+    '/opt/aldebaran/lib python -'
+)
+
 
 class IntegrationError(RuntimeError):
     pass
@@ -30,20 +37,39 @@ class IntegrationError(RuntimeError):
 
 def req(method, path, **kwargs):
     try:
-        res = requests.request(method, API + path, timeout=kwargs.pop('timeout', 30), **kwargs)
+        res = requests.request(
+            method, API + path, timeout=kwargs.pop('timeout', 30), **kwargs
+        )
         res.raise_for_status()
         return res.json()
     except requests.RequestException as error:
         detail = getattr(getattr(error, 'response', None), 'text', '')
-        raise IntegrationError('%s %s: %s %s' % (method, path, error, detail[:400])) from error
+        raise IntegrationError(
+            '%s %s: %s %s' % (method, path, error, detail[:400])
+        ) from error
+
+
+def robot_ssh_command(ip):
+    return [
+        'ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+        'nao@' + ip, NAO_PYTHON_COMMAND,
+    ]
 
 
 def probe_robot(ip):
-    p = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
-                        'nao@' + ip, 'python', '-c', 'import naoqi; print("NAOQI_OK")'],
-                       capture_output=True, text=True, timeout=16)
+    # Send Python 2 code through stdin: avoids nested PowerShell/SSH quoting.
+    p = subprocess.run(
+        robot_ssh_command(ip),
+        input='import naoqi\nprint("NAOQI_OK")\n',
+        capture_output=True,
+        text=True,
+        timeout=16,
+    )
     if p.returncode or 'NAOQI_OK' not in p.stdout:
-        raise IntegrationError('Robot SSH/NAOqi check failed: ' + (p.stderr or p.stdout).strip()[-500:])
+        raise IntegrationError(
+            'Robot SSH/NAOqi check failed: '
+            + (p.stderr or p.stdout or 'No output from robot').strip()[-500:]
+        )
 
 
 def preflight(ip, check_robot=True):
@@ -52,8 +78,10 @@ def preflight(ip, check_robot=True):
         r = requests.get(OLLAMA + '/api/tags', timeout=10)
         r.raise_for_status()
         names = [x.get('name', '') for x in r.json().get('models', [])]
-        if not any(n.split(':')[0] == MODEL.split(':')[0] and n.split(':')[-1] == MODEL.split(':')[-1] for n in names):
-            raise IntegrationError('Ollama model %s missing. Installed models: %s' % (MODEL, names))
+        if MODEL not in names:
+            raise IntegrationError(
+                'Ollama model %s missing. Installed models: %s' % (MODEL, names)
+            )
     except requests.RequestException as e:
         raise IntegrationError('Ollama unreachable at %s: %s' % (OLLAMA, e)) from e
     if check_robot:
@@ -83,7 +111,7 @@ try:
         photo.setResolution(2)
         photo.setPictureFormat("jpg")
         returned = photo.takePicture("/home/nao", label)
-        # Some NAOqi versions return a list of paths; others use the requested path.
+        # Some NAOqi versions return paths; others use the requested path.
         if not os.path.isfile(image):
             candidates = returned if isinstance(returned, (list, tuple)) else [returned]
             for candidate in candidates:
@@ -104,20 +132,42 @@ except Exception as e:
 
 
 def capture_from_robot(ip, question, label, dest):
-    safe_label = re.sub('[^A-Za-z0-9_]', '_', label)
-    src = ROBOT_SCRIPT.replace('__QUESTION_B64__', base64.b64encode(question.encode('utf-8')).decode('ascii')).replace('__LABEL__', safe_label)
-    command = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', 'nao@'+ip, 'python', '-']
-    p = subprocess.run(command, input=src, capture_output=True, text=True, timeout=100)
+    safe_label = re.sub(r'[^A-Za-z0-9_]', '_', label)
+    src = (
+        ROBOT_SCRIPT
+        .replace('__QUESTION_B64__', base64.b64encode(question.encode('utf-8')).decode('ascii'))
+        .replace('__LABEL__', safe_label)
+    )
+    p = subprocess.run(
+        robot_ssh_command(ip),
+        input=src,
+        capture_output=True,
+        text=True,
+        timeout=100,
+    )
     if p.returncode:
         raise IntegrationError('NAO capture failed: ' + (p.stderr or p.stdout)[-900:])
-    outputs = dict(x.split('=', 1) for x in p.stdout.splitlines() if x.startswith(('__AUDIO__=', '__IMAGE__=')))
+
+    outputs = dict(
+        x.split('=', 1) for x in p.stdout.splitlines()
+        if x.startswith(('__AUDIO__=', '__IMAGE__='))
+    )
     if '__AUDIO__' not in outputs or '__IMAGE__' not in outputs:
         raise IntegrationError('Missing capture paths from NAO: ' + p.stdout[-700:])
-    local_audio, local_image = dest / (safe_label + '.wav'), dest / (safe_label + '.jpg')
-    for remote, local in ((outputs['__AUDIO__'], local_audio), (outputs['__IMAGE__'], local_image)):
+
+    local_audio = dest / (safe_label + '.wav')
+    local_image = dest / (safe_label + '.jpg')
+    for remote, local in (
+        (outputs['__AUDIO__'], local_audio),
+        (outputs['__IMAGE__'], local_image),
+    ):
         if not remote.startswith('/home/nao/'):
             raise IntegrationError('Unsafe remote capture path: ' + remote)
-        subprocess.run(['scp', '-o', 'BatchMode=yes', 'nao@'+ip+':'+remote, str(local)], check=True, timeout=90)
+        subprocess.run(
+            ['scp', '-o', 'BatchMode=yes', 'nao@' + ip + ':' + remote, str(local)],
+            check=True,
+            timeout=90,
+        )
         if not local.is_file() or not local.stat().st_size:
             raise IntegrationError('Empty capture: ' + str(local))
     return local_audio, local_image
@@ -125,9 +175,19 @@ def capture_from_robot(ip, question, label, dest):
 
 def upload_capture(sid, scenario_id, audio, image):
     with image.open('rb') as f:
-        req('POST', '/api/camera/session-frame', data={'session_id':sid,'scenario_id':str(scenario_id)}, files={'frame':(image.name,f,'image/jpeg')}, timeout=60)
+        req(
+            'POST', '/api/camera/session-frame',
+            data={'session_id': sid, 'scenario_id': str(scenario_id)},
+            files={'frame': (image.name, f, 'image/jpeg')},
+            timeout=60,
+        )
     with audio.open('rb') as f:
-        return req('POST', '/api/audio/evaluate', data={'session_id':sid,'scenario_id':str(scenario_id)}, files={'audio':(audio.name,f,'audio/wav')}, timeout=360)
+        return req(
+            'POST', '/api/audio/evaluate',
+            data={'session_id': sid, 'scenario_id': str(scenario_id)},
+            files={'audio': (audio.name, f, 'audio/wav')},
+            timeout=360,
+        )
 
 
 def show_image(scenario):
@@ -155,8 +215,12 @@ def run(args):
                     break
                 scenario = response['scenario']
                 scenario_id = int(scenario['scenario_id'])
-                print('\nScenario %s — reference label: %s' % (scenario_id, scenario['reference_label']))
-                req('POST', '/api/scenario/start', json={'session_id':sid,'scenario_id':scenario_id})
+                print('\nScenario %s - reference label: %s' % (
+                    scenario_id, scenario['reference_label']
+                ))
+                req('POST', '/api/scenario/start', json={
+                    'session_id': sid, 'scenario_id': scenario_id,
+                })
                 show_image(scenario)
                 question = args.question
                 try:
@@ -164,31 +228,47 @@ def run(args):
                         audio = args.samples_dir / ('scenario_%s.wav' % scenario_id)
                         image = args.samples_dir / ('scenario_%s.jpg' % scenario_id)
                         if not (audio.is_file() and image.is_file()):
-                            raise IntegrationError('Sample WAV/JPG not found for scenario %s' % scenario_id)
+                            raise IntegrationError(
+                                'Sample WAV/JPG not found for scenario %s' % scenario_id
+                            )
                     else:
-                        audio, image = capture_from_robot(args.nao_ip, question, 'nao_%s_%s' % (sid[:8], scenario_id), folder)
+                        audio, image = capture_from_robot(
+                            args.nao_ip, question,
+                            'nao_%s_%s' % (sid[:8], scenario_id), folder,
+                        )
                     result = upload_capture(sid, scenario_id, audio, image)
                     print('Evaluated:', json.dumps(result, ensure_ascii=False)[:900])
-                    req('POST', '/api/scenario/complete', json={'session_id':sid,'scenario_id':scenario_id})
-                except (IntegrationError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                    req('POST', '/api/scenario/complete', json={
+                        'session_id': sid, 'scenario_id': scenario_id,
+                    })
+                except (IntegrationError, subprocess.CalledProcessError,
+                        subprocess.TimeoutExpired) as e:
                     print('WARNING: scenario %s failed: %s' % (scenario_id, e))
                     reason = 'processing_failed'
-                    if 'Sample WAV/JPG not found' in str(e): reason='no_response'
-                    req('POST', '/api/scenario/recovery', json={'session_id':sid,'scenario_id':scenario_id, 'action':'skip','reason':reason})
+                    if 'Sample WAV/JPG not found' in str(e):
+                        reason = 'no_response'
+                    req('POST', '/api/scenario/recovery', json={
+                        'session_id': sid, 'scenario_id': scenario_id,
+                        'action': 'skip', 'reason': reason,
+                    })
                 index += 1
     finally:
-        # On unexpected crash, the active scenario may remain in-progress;
-        # preserve its state for inspection instead of overwriting it.
+        # Preserve active-scenario state for inspection if unexpected errors occur.
         try:
             session = req('GET', '/api/session/' + sid)
             active = session.get('active_scenario_id')
             if active is not None:
-                req('POST', '/api/scenario/recovery', json={'session_id':sid,'scenario_id':active,'action':'skip','reason':'processing_failed'})
-            req('POST', '/api/session/end', json={'session_id':sid})
+                req('POST', '/api/scenario/recovery', json={
+                    'session_id': sid, 'scenario_id': active,
+                    'action': 'skip', 'reason': 'processing_failed',
+                })
+            req('POST', '/api/session/end', json={'session_id': sid})
             report = req('GET', '/api/session/' + sid + '/report')
             output = ROOT / 'data' / ('session_%s_report.json' % sid)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
+            output.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8'
+            )
             print('\nReport saved:', output)
             print('HTML report:', API + '/api/session/' + sid + '/report/view')
         except Exception as e:
@@ -196,13 +276,23 @@ def run(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run NAO scenarios via existing FastAPI backend')
-    parser.add_argument('--nao-ip', default=os.environ.get('NAO_IP', '169.254.247.199'))
-    parser.add_argument('--question', default='What emotion do you see in this picture?')
-    parser.add_argument('--samples-dir', type=Path, help='Replay scenario_1.wav/jpg etc. without NAO (real AI required)')
+    parser = argparse.ArgumentParser(
+        description='Run NAO scenarios via existing FastAPI backend'
+    )
+    parser.add_argument(
+        '--nao-ip', default=os.environ.get('NAO_IP', '169.254.247.199')
+    )
+    parser.add_argument(
+        '--question', default='What emotion do you see in this picture?'
+    )
+    parser.add_argument(
+        '--samples-dir', type=Path,
+        help='Replay scenario_1.wav/jpg etc. without NAO (real AI required)',
+    )
     args = parser.parse_args()
     try:
         run(args)
-    except (IntegrationError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+    except (IntegrationError, OSError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as e:
         print('ERROR:', e, file=sys.stderr)
         sys.exit(1)
