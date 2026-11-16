@@ -278,7 +278,7 @@ class BackendWorkflowTests(unittest.TestCase):
         frame = asyncio.run(backend.upload_session_frame(
             session_id=self.session_id, scenario_id=1, frame=sample_image()
         ))
-        self.submit(1)
+        # Facial inference must work before any spoken response is submitted.
         with mock.patch.object(
             backend, "classify_facial_frame",
             return_value={"dominant_emotion": "Happy", "confidence": 0.91}
@@ -291,26 +291,21 @@ class BackendWorkflowTests(unittest.TestCase):
         self.assertEqual(first["facial_result"]["source"], "resmaskingnet")
         self.assertEqual(first["facial_result"]["image_file"], frame["image_file"])
         self.assertEqual(
-            len(backend.sessions[self.session_id]["results"][0]["facial_observations"]), 1
+            len(backend.sessions[self.session_id]["facial_observations"]["1"]), 1
         )
         report = backend.generate_session_report(self.session_id)
         self.assertEqual(report["facial_analysis"]["model_observations"], 1)
         self.assertEqual(report["facial_analysis"]["most_frequent_expression"], "Happy")
-        self.assertEqual(
-            report["scenario_details"][0]["verbal_facial_comparison"], "Agreement"
-        )
+        self.assertEqual(report["scenario_details"], [])
+        self.assertEqual(report["facial_analysis"]["observations"][0]["dominant_expression"], "Happy")
 
-    def test_facial_evaluation_requires_a_saved_response_and_frame(self):
-        """Facial analysis needs both a saved answer and camera frame."""
+    def test_facial_evaluation_requires_a_frame_not_a_response(self):
+        """Facial analysis is independent of speech but requires a camera frame."""
         self.start(1)
-        with self.assertRaises(HTTPException) as missing_answer:
-            backend.evaluate_facial_frame(self.event(1))
-        self.assertEqual(missing_answer.exception.status_code, 409)
-
-        self.submit(1)
         with self.assertRaises(HTTPException) as missing_frame:
             backend.evaluate_facial_frame(self.event(1))
         self.assertEqual(missing_frame.exception.status_code, 404)
+        self.assertEqual(backend.sessions[self.session_id]["results"], [])
 
     def test_no_face_does_not_create_a_real_observation(self):
         """A frame with no detected face must not create model statistics."""
@@ -334,7 +329,6 @@ class BackendWorkflowTests(unittest.TestCase):
     def test_mock_observation_is_excluded_from_real_report(self):
         """Manual/mock face results remain separate from real CV metrics."""
         self.start(1)
-        self.submit(1)
         observation = backend.save_facial_result(
             backend.FacialResult(
                 session_id=self.session_id,
@@ -347,9 +341,7 @@ class BackendWorkflowTests(unittest.TestCase):
         report = backend.generate_session_report(self.session_id)
         self.assertEqual(report["facial_analysis"]["model_observations"], 0)
         self.assertEqual(report["facial_analysis"]["mock_observations_excluded"], 1)
-        self.assertEqual(
-            report["scenario_details"][0]["verbal_facial_comparison"], "Unavailable"
-        )
+        self.assertEqual(report["scenario_details"], [])
 
 
 class FacialClassifierTests(unittest.TestCase):
