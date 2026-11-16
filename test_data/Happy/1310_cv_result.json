@@ -1,0 +1,28 @@
+{
+  "model": "ResMaskingNet (RMN pretrained)",
+  "input_image": "C:\\Users\\ragha\\OneDrive\\New folder\\test_data\\Happy\\1310.jpg",
+  "created_at": "2026-11-14T04:09:58+03:00",
+  "status": "success",
+  "faces": [
+    {
+      "emotion": "happy",
+      "confidence": 0.79038,
+      "probabilities": {
+        "angry": 0.0,
+        "disgust": 0.0,
+        "fear": 0.0,
+        "happy": 0.79038,
+        "sad": 0.0,
+        "surprise": 0.0,
+        "neutral": 0.0
+      },
+      "bounding_box": {
+        "xmin": 9,
+        "ymin": 48,
+        "xmax": 156,
+        "ymax": 195
+      }
+    }
+  ],
+  "note": "Model confidence is not a measure of accuracy. Facial expression does not establish internal emotion."
+}
