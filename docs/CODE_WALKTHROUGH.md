@@ -50,17 +50,11 @@ The system produces two independent outputs:
 
 Facial expressions do not determine whether a verbal response is correct.
 
-### 1.3 Verbal–Facial Comparison
+### 1.3 Independent Report Sections
 
-The session report provides a descriptive comparison between the verbal emotion classification and the observed facial expression.
+The verbal branch evaluates the open-ended spoken description against the displayed scenario's reference emotion. The facial branch independently detects and records expressions from NAO camera frames, including when no spoken answer has yet been saved.
 
-| Outcome | Description |
-|---|---|
-| Agreement | Verbal and facial emotion labels match |
-| Mismatch | Both labels are available but differ |
-| Unavailable | One or both classifications are unavailable or unclear |
-
-These comparisons are descriptive only. They do not establish a participant's internal emotional state, clinical condition, or engagement level.
+The report contains separate verbal-performance and facial-observation sections. It does **not** compare verbal and facial labels and does not calculate agreement or mismatch scores. Facial observations are descriptive evidence for specialist review, not correctness or engagement measurements.
 
 The current technical evaluation uses predefined scenarios and does not involve trials with children with Autism Spectrum Disorder (ASD).
 
@@ -149,7 +143,7 @@ AI inference runs on the computer rather than directly on the robot.
 | `backend/emotion_classifier.py` | Qwen/Ollama classification requests and output validation |
 | `backend/vision.py` | Camera uploads, image storage, and facial-observation endpoints |
 | `backend/facial_classifier.py` | Local ResMaskingNet inference adapter |
-| `backend/reports.py` | JSON/HTML reports, verbal performance, facial observations, and descriptive comparison |
+| `backend/reports.py` | JSON/HTML reports with independent verbal performance and facial observations |
 | `backend/schemas.py` | Request payload types and validation |
 
 ### 3.3 Testing and Historical Code
