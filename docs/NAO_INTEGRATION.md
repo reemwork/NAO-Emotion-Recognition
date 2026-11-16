@@ -75,13 +75,7 @@ classification is unreliable.
 
 Facial-expression analysis is independent of verbal correctness.
 
-The session report can describe verbal–facial relationships as:
-
-- Agreement
-- Mismatch
-- Unavailable
-
-These comparisons are descriptive only.
+The session report presents verbal response accuracy and facial-expression observations in separate sections. There is no verbal–facial comparison or agreement/mismatch score. Facial analysis can run before a verbal response is submitted.
 
 ## Automated Tests
 
