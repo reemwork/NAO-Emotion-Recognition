@@ -15,7 +15,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest import mock
-
+import run_session as nao_runner
 import requests
 from fastapi import HTTPException, UploadFile
 from PIL import Image
@@ -30,7 +30,6 @@ fake_stt.transcribe_audio = mock.Mock(return_value="Mock transcript")
 sys.modules["backend.transcribe_audio"] = fake_stt
 backend = importlib.import_module("backend.app")
 
-from backend import nao_transfer
 
 
 def sample_image():
@@ -417,55 +416,113 @@ class FacialClassifierTests(unittest.TestCase):
         self.assertIs(backend.evaluate_facial_frame, vision.evaluate_facial_frame)
 
 
-class TransferTests(unittest.TestCase):
-    """Unit tests for the session-aware transfer CLI."""
-    def test_default_robot_audio_matches_choregraphe(self):
-        """Keep the transfer script's audio path aligned with Choregraphe."""
-        self.assertEqual(nao_transfer.DEFAULT_NAO_AUDIO,
-                         "/home/nao/response.wav")
 
-    @mock.patch.object(nao_transfer.requests, "post")
-    @mock.patch.object(nao_transfer.requests, "get")
-    def test_file_uploads_use_matching_session_and_scenario(
-        self, mock_get, mock_post
-    ):
-        """Audio and images must be uploaded with consistent scenario IDs."""
+class TransferTests(unittest.TestCase):
+    """Tests for the real NAO session upload workflow."""
+
+    def test_file_uploads_use_matching_session_and_scenario(self):
+        """Upload image and audio to the same active scenario."""
+
         with tempfile.TemporaryDirectory() as folder:
             wav = Path(folder) / "response.wav"
             jpg = Path(folder) / "face.jpg"
+
             wav.write_bytes(b"RIFFdemo")
             jpg.write_bytes(b"image-demo")
-            mock_get.return_value.json.return_value = {
-                "session_status": "active", "active_scenario_id": 2
+
+            with mock.patch.object(
+                nao_runner, "req"
+            ) as mock_req:
+
+                mock_req.side_effect = [
+                    {
+                        "session_status": "active",
+                        "active_scenario_id": 2
+                    },
+                    {"status": "success"},
+                    {"status": "success"}
+                ]
+
+                result = nao_runner.upload_capture(
+                    "example-session",
+                    2,
+                    wav,
+                    jpg
+                )
+
+        self.assertEqual(mock_req.call_count, 3)
+
+        calls = mock_req.call_args_list
+
+        self.assertEqual(calls[0].args, (
+            "GET", "/api/session/example-session"
+        ))
+
+        self.assertEqual(calls[1].args, (
+            "POST", "/api/camera/session-frame"
+        ))
+
+        self.assertEqual(calls[2].args, (
+            "POST", "/api/audio/evaluate"
+        ))
+
+        for call in calls[1:]:
+            self.assertEqual(
+                call.kwargs["data"],
+                {
+                    "session_id": "example-session",
+                    "scenario_id": "2"
+                }
+            )
+
+        self.assertEqual(result["status"], "success")
+
+    def test_mismatched_scenario_is_rejected(self):
+        """Reject uploads for a different active scenario."""
+
+        with mock.patch.object(
+            nao_runner, "req",
+            return_value={
+                "session_status": "active",
+                "active_scenario_id": 3
             }
-            mock_post.return_value.json.return_value = {"status": "success"}
-            result = nao_transfer.upload_captures(
-                "example-session", 2,
-                audio_path=wav, image_paths=[jpg]
+        ) as mock_req, self.assertRaises(
+            nao_runner.IntegrationError
+        ):
+            nao_runner.upload_capture(
+                "test-session",
+                1,
+                Path("missing.wav"),
+                Path("missing.jpg")
             )
-        self.assertEqual(mock_post.call_count, 2)
-        endpoints = [call.args[0] for call in mock_post.call_args_list]
-        self.assertTrue(endpoints[0].endswith("/api/camera/session-frame"))
-        self.assertTrue(endpoints[1].endswith("/api/audio/evaluate"))
-        for call in mock_post.call_args_list:
-            self.assertEqual(call.kwargs["data"], {
-                "session_id": "example-session", "scenario_id": "2"
-            })
-        self.assertIsNotNone(result["audio"])
 
-    @mock.patch.object(nao_transfer.requests, "post")
-    @mock.patch.object(nao_transfer.requests, "get")
-    def test_mismatched_scenario_is_rejected(self, mock_get, mock_post):
-        """Do not transfer files to a different active scenario."""
-        mock_get.return_value.json.return_value = {
-            "session_status": "active", "active_scenario_id": 3
-        }
-        with self.assertRaises(RuntimeError):
-            nao_transfer.upload_captures(
-                "test-session", 1, audio_path="missing.wav"
-            )
-        mock_post.assert_not_called()
+        mock_req.assert_called_once_with(
+            "GET",
+            "/api/session/test-session"
+        )
 
+    def test_inactive_session_is_rejected(self):
+        """Reject uploads after the session has ended."""
 
-if __name__ == "__main__":
-    unittest.main()
+        with mock.patch.object(
+            nao_runner, "req",
+            return_value={
+                "session_status": "completed",
+                "active_scenario_id": None
+            }
+        ) as mock_req:
+
+            with self.assertRaises(
+                nao_runner.IntegrationError
+            ):
+                nao_runner.upload_capture(
+                    "ended-session",
+                    1,
+                    Path("missing.wav"),
+                    Path("missing.jpg")
+                )
+
+        mock_req.assert_called_once_with(
+            "GET",
+            "/api/session/ended-session"
+        )

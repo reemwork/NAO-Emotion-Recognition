@@ -294,6 +294,18 @@ def capture_from_robot(ip, question, label, dest):
 def upload_capture(sid, scenario_id, audio, image):
     """Upload NAO image and audio to the backend."""
 
+    # Validate the active session and scenario before uploading.
+    session = req("GET", "/api/session/" + sid)
+
+    if (
+        session.get("session_status") != "active"
+        or session.get("active_scenario_id") != scenario_id
+    ):
+        raise IntegrationError(
+            "Session/scenario mismatch. "
+            "The requested scenario must be active before uploading."
+        )
+
     # Upload the facial image first.
     with image.open("rb") as file:
         req(
