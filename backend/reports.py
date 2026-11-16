@@ -139,6 +139,41 @@ def generate_session_report(session_id: str):
         for observation in (records or []):
             add_observation(scenario_id, observation)
 
+    # Compare verbal and facial emotions for reporting only.
+    # Mock observations must never influence the comparison.
+    # Facial expressions do not determine verbal correctness.
+    for detail in verbal_details:
+        scenario_id = str(detail["scenario_id"])
+        verbal_emotion = detail["verbal_emotion"]
+
+        real_emotions = [
+            obs["dominant_expression"]
+            for obs in observations
+            if str(obs["scenario_id"]) == scenario_id
+            and obs["dominant_expression"] is not None
+        ]
+
+        if real_emotions:
+            dominant_facial = Counter(real_emotions).most_common(1)[0][0]
+        else:
+            dominant_facial = None
+
+        if (
+            dominant_facial is None
+            or verbal_emotion is None
+            or verbal_emotion == "Unclear"
+        ):
+            comparison = "Unavailable"
+
+        elif verbal_emotion == dominant_facial:
+            comparison = "Agreement"
+
+        else:
+            comparison = "Mismatch"
+
+        detail["dominant_facial_expression"] = dominant_facial
+        detail["verbal_facial_comparison"] = comparison
+
     frames = []
     for scenario_id, paths in sorted(_scenario_frames(session, results).items()):
         for index, path in enumerate(paths):
