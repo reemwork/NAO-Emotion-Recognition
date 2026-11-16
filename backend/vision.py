@@ -339,21 +339,6 @@ def evaluate_facial_frame(data: ScenarioEvent):
             detail="Start the requested scenario before facial evaluation."
         )
 
-    # Find the saved verbal response.
-    result = next(
-        (
-            item for item in session["results"]
-            if item["scenario_id"] == data.scenario_id
-        ),
-        None
-    )
-
-    if result is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Submit the verbal response before facial evaluation."
-        )
-
     # Get the latest image from this scenario.
     frames = session.get("captured_frames", {}).get(
         str(data.scenario_id), []
@@ -368,7 +353,10 @@ def evaluate_facial_frame(data: ScenarioEvent):
     image_file = frames[-1]
 
     # Avoid analyzing the same image twice.
-    for observation in result.get("facial_observations", []):
+    observations = session.setdefault("facial_observations", {}).setdefault(
+        str(data.scenario_id), []
+    )
+    for observation in observations:
         if (
             observation.get("source") == "resmaskingnet"
             and observation.get("image_file") == image_file
@@ -421,7 +409,8 @@ def evaluate_facial_frame(data: ScenarioEvent):
         "recorded_at": datetime.now(timezone.utc).isoformat()
     }
 
-    result.setdefault("facial_observations", []).append(observation)
+    observations.append(observation)
+    session.setdefault("camera_analysis_status", {})[image_file] = "Analyzed"
     save_sessions()
 
     return {
@@ -430,7 +419,7 @@ def evaluate_facial_frame(data: ScenarioEvent):
         "session_id": data.session_id,
         "scenario_id": data.scenario_id,
         "facial_result": observation,
-        "total_observations": len(result["facial_observations"])
+        "total_observations": len(observations)
     }
 
 
@@ -454,19 +443,10 @@ def save_facial_result(data: FacialResult):
             detail="Session has already ended."
         )
 
-    # Find the response linked to this scenario.
-    result = next(
-        (
-            item for item in session["results"]
-            if item["scenario_id"] == data.scenario_id
-        ),
-        None
-    )
-
-    if result is None:
+    if session.get("active_scenario_id") != data.scenario_id:
         raise HTTPException(
-            status_code=404,
-            detail="No saved response for this scenario."
+            status_code=409,
+            detail="Start the requested scenario before saving a facial result."
         )
 
     # Save test results without running the facial model.
@@ -474,16 +454,19 @@ def save_facial_result(data: FacialResult):
         "observation_id": str(uuid4()),
         "dominant_emotion": data.dominant_emotion,
         "confidence": data.confidence,
-        "image_file": result.get("face_image_file"),
+        "image_file": (
+            (session.get("captured_frames") or {}).get(str(data.scenario_id)) or [None]
+        )[-1],
         "source": "mock",
         "recorded_at": datetime.now(
             timezone.utc
         ).isoformat()
     }
 
-    result.setdefault(
-        "facial_observations", []
-    ).append(observation)
+    observations = session.setdefault("facial_observations", {}).setdefault(
+        str(data.scenario_id), []
+    )
+    observations.append(observation)
 
     save_sessions()
 
@@ -492,7 +475,5 @@ def save_facial_result(data: FacialResult):
         "session_id": data.session_id,
         "scenario_id": data.scenario_id,
         "facial_result": observation,
-        "total_observations": len(
-            result["facial_observations"]
-        )
+        "total_observations": len(observations)
     }
