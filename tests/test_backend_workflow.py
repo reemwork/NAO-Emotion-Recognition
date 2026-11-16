@@ -432,6 +432,7 @@ class TransferTests(unittest.TestCase):
                         "active_scenario_id": 2
                     },
                     {"status": "success"},
+                    {"status": "success", "facial_result": {"dominant_emotion": "Angry"}},
                     {"status": "success"}
                 ]
 
@@ -442,7 +443,7 @@ class TransferTests(unittest.TestCase):
                     jpg
                 )
 
-        self.assertEqual(mock_req.call_count, 3)
+        self.assertEqual(mock_req.call_count, 4)
 
         calls = mock_req.call_args_list
 
@@ -455,10 +456,17 @@ class TransferTests(unittest.TestCase):
         ))
 
         self.assertEqual(calls[2].args, (
+            "POST", "/api/facial/evaluate"
+        ))
+        self.assertEqual(calls[2].kwargs["json"], {
+            "session_id": "example-session",
+            "scenario_id": 2
+        })
+        self.assertEqual(calls[3].args, (
             "POST", "/api/audio/evaluate"
         ))
 
-        for call in calls[1:]:
+        for call in (calls[1], calls[3]):
             self.assertEqual(
                 call.kwargs["data"],
                 {
