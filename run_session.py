@@ -325,6 +325,10 @@ def upload_capture(sid, scenario_id, audio, image):
             timeout=60
         )
 
+    # Analyze the camera frame independently, before speech processing.
+    # Its report observation remains available even if transcription fails.
+    analyze_facial_expression(sid, scenario_id)
+
     # Upload audio for Whisper and Qwen evaluation.
     with audio.open("rb") as file:
         return req(
@@ -500,10 +504,8 @@ def run(args):
                             folder
                         )
 
-                    # STEP 1:
-                    # Upload NAO camera image and audio.
-                    # Whisper transcribes the spoken response.
-                    # Qwen evaluates the detected verbal emotion.
+                    # Upload and analyze the NAO frame independently,
+                    # then process the recorded audio using Whisper/Qwen.
                     result = upload_capture(
                         sid,
                         scenario_id,
@@ -519,15 +521,6 @@ def run(args):
                         )[:900]
                     )
 
-                    # STEP 2:
-                    # Classify the captured facial expression.
-                    # This does not change verbal correctness.
-                    analyze_facial_expression(
-                        sid,
-                        scenario_id
-                    )
-
-                    # STEP 3:
                     # Mark the scenario as completed.
                     req(
                         "POST",
