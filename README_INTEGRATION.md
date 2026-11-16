@@ -1,37 +1,43 @@
-# Single-command NAO session coordinator (experimental)
+# NAO Emotion Recognition — Integration Guide
 
-These are **new companion scripts**, not replacements for the team's existing modules. Copy `run_session.py` and `START_NAO.ps1` into the repository root, beside `backend/` and `data/`.
+**Last updated:** November 16, 2026  
+**Status:** Local model and API integration checked; full physical NAO workflow validation pending.
 
-PowerShell from repository root:
+## Overview
 
-```powershell
-.\START_NAO.ps1 -NaoIP 169.254.247.199
-```
+The physical NAO robot handles interaction, audio recording, and camera capture. A Windows PC runs FastAPI, Whisper Small, Qwen2.5-VL 3B, and ResMaskingNet.
 
-Prerequisites:
-- Python venv with `requests`, `uvicorn`, and existing backend dependencies.
-- Ollama running locally, `ollama list` includes `qwen2.5vl:3b`.
-- SSH key login: `ssh nao@ROBOT_IP "python -c 'import naoqi; print(1)'"`.
-- Physical NAO permits remote Python execution with `naoqi`, NAOqi services `ALTextToSpeech`, `ALAudioRecorder`, `ALPhotoCapture`.
-- Actual image files `data/scenario_images/{happy,sad,angry,neutral}_01.jpg` exist and a suitable external display is available.
-- Existing app's transcript model `whisper small` loads, HTTP APIs are working.
+## Quick Start
 
-The launcher opens FastAPI and `run_session.py` checks Ollama and robot availability, creates a backend session, loops through `data/scenarios.json`, opens each scenario image on PC, asks a question using robot TTS, records 8 seconds of robot audio and takes a robot image, transfers both through SCP, sends them to session-scoped APIs, then closes the session and writes a JSON report under `data/`.
-
-It can replay prerecorded scenarios without a robot:
+From the repository root on Windows, double-click `START_NAO.bat`, or run:
 
 ```powershell
-python run_session.py --samples-dir .\test_captures
+.\START_NAO.ps1 -NaoIP YOUR_NAO_IP
 ```
 
-where `test_captures` contains `scenario_1.wav` and `scenario_1.jpg`, etc. This still uses *real* Whisper, Ollama and backend, and needs its services.
+The launcher checks connectivity and starts the NAO session coordinator `run_session.py`.
 
-**Known current limitations (read before demo):**
-- Physical robot capture code has **not been hardware-tested** and NAOqi `ALPhotoCapture.takePicture` return/output formats may vary.
-- User must prearrange the external monitor/browser. Browser opens image but does not guarantee fullscreen or moving it onto the external screen.
-- The existing facial `/api/facial/result` endpoint explicitly records `source: mock`. This coordinator **never calls it** or fabricates CV data. Full facial-classification integration is still needed from the team.
-- The question is a single generic question; robot interaction team may replace this with scenario-specific Choregraphe behavior.
-- Audio and frame acquisition are coordinated per scenario but not precisely synchronized/timestamp aligned.
-- Errors result in a `skipped` scenario rather than a false `Incorrect` or `Unclear` score.
-- Session API and unencrypted private material are restricted to local PC; additional authentication/privacy controls needed before real participant use.
-- Do **not** run legacy `backend/watch.py` simultaneously with this coordinator.
+## Independent evaluation branches
+
+- **Verbal:** WAV audio → Whisper transcription → Qwen emotion label → compare **only** to the displayed scenario's reference label → Correct / Incorrect / Unclear.
+- **Facial:** NAO camera frame → ResMaskingNet → detected facial expression and confidence → report directly. No verbal response is required to process a saved frame.
+- **Report:** Presents verbal correctness and facial observations in **separate sections**. There is **no verbal–facial comparison**, agreement metric, or mismatch score.
+
+The verbal classifier uses Happy, Sad, Angry, Neutral and may output Unclear. Facial expression labels follow the configured ResMaskingNet model.
+
+## Testing
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Local testing has separately verified Whisper, Qwen and ResMaskingNet inference, plus the API audio and camera paths. Full physical end-to-end testing with NAO remains pending. Mock-based unit tests do not establish hardware readiness.
+
+## Documentation
+
+- `docs/CODE_WALKTHROUGH.md` — architecture and module responsibilities
+- `docs/NAO_INTEGRATION.md` — integration, transfer and validation
+
+## Notes
+
+The project currently evaluates predefined technical scenarios, not children with ASD. Treat camera images and audio as sensitive test material. Older manual transfer and watcher utilities are not part of the active workflow.
