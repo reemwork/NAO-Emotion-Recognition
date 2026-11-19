@@ -87,11 +87,9 @@ function Detect-NaoAddress {
 try {
     Info "Project: $root"
     $python = Join-Path $root 'venv\Scripts\python.exe'
-    foreach ($required in @($python, (Join-Path $root 'backend\app.py'), (Join-Path $root 'run_session.py'))) {
-        if (-not (Test-Path -LiteralPath $required)) { Fail "Required file not found: $required" }
+    foreach ($required in @($python, (Join-Path $root 'backend\app.py'))) {        if (-not (Test-Path -LiteralPath $required)) { Fail "Required file not found: $required" }
     }
-    if ($BackendPort -ne 8000) { Fail 'run_session.py currently uses port 8000; leave BackendPort=8000.' }
-
+    if ($BackendPort -ne 8000) { Fail 'Backend currently uses port 8000.' }
     # Check the robot BEFORE starting a session. This does not send any movement or recording commands.
     $selectedIP = Detect-NaoAddress
     Info "NAO SSH reachable at $selectedIP. Session checks will verify NAOqi and SSH authentication."
@@ -117,14 +115,13 @@ try {
     }
     if (-not (Wait-Http $backendUrl 60)) { Fail 'FastAPI unavailable. Check data\startup_logs\fastapi.err.log' }
     Info 'FastAPI ready.'
+@{ nao_ip = $selectedIP } |
+    ConvertTo-Json |
+    Set-Content -LiteralPath $configPath -Encoding UTF8
 
-    Info "Starting NAO session with $selectedIP ..."
-    & $python (Join-Path $root 'run_session.py') --nao-ip $selectedIP
-    if ($LASTEXITCODE -ne 0) { Fail "Session coordinator failed (exit $LASTEXITCODE). Verify SSH authentication, NAOqi, and model inference." }
-
-    # Remember a successfully used robot address for the next launch.
-    @{ nao_ip = $selectedIP } | ConvertTo-Json | Set-Content -LiteralPath $configPath -Encoding UTF8
-    Info "Session complete. Saved IP $selectedIP for the next launch."
+    Info "NAO connection detected."
+    Info "FastAPI and Ollama are ready."
+    Info "Waiting for physical NAO integration."
     exit 0
 } catch {
     Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red

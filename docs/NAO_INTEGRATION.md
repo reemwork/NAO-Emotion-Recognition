@@ -143,7 +143,7 @@ The PowerShell startup script performs the following operations:
 8. Verifies that `qwen2.5vl:3b` is installed.
 9. Checks whether FastAPI is available at `127.0.0.1:8000`.
 10. Starts FastAPI when necessary.
-11. Launches `run_session.py` with the selected NAO IP.
+11. The launcher finishes after verifying NAO connectivity and preparing FastAPI and Ollama. It does not automatically start a session.
 12. Saves the robot IP after the session coordinator exits successfully.
 
 ### Robot IP Detection
@@ -180,7 +180,7 @@ Example:
 
 The address above is illustrative and is not the actual robot address.
 
-The IP address is saved only after `run_session.py` exits with a successful status.
+The verified NAO IP address is saved after the startup checks and backend services are successfully prepared. The physical NAO interaction and data capture are triggered separately during integration.
 
 The configuration should remain local rather than being committed to the repository.
 
