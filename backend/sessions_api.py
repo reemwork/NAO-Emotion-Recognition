@@ -1,156 +1,190 @@
-"""
-This file manages the training sessions and scenarios.
 
-It starts and ends sessions, and keeps track of which scenario
-is currently running.
+"""Manage NAO sessions, scenarios, recovery, and verbal progress."""
 
-It also handles what happens when a scenario is completed,
-skipped, or needs to be repeated.
-
-This helps the system keep track of the session progress
-and makes sure each response is linked to the correct scenario.
-"""
 from datetime import datetime, timezone
-import backend
 from uuid import uuid4
+
 from fastapi import APIRouter, HTTPException
-from backend.schemas import ScenarioEvent, SessionEnd, ScenarioRecovery
+
+import backend
+from backend.schemas import ScenarioEvent, ScenarioRecovery, SessionEnd
 
 router = APIRouter(tags=["Sessions / Scenarios"])
 
+
+# -------------------- Shared Helpers --------------------
+
 def _backend():
-    """Resolve central session state only when a request runs."""
-    # Use the already loaded package module (no recursive re-import).
-    # This also preserves monkeypatched backend.app aliases in offline tests.
+    """Access shared backend state and preserve test monkeypatching."""
     return backend.app
 
-def record_scenario_issue(session, scenario_id, reason):
-    """Record an STT/MLLM failure on the active scenario, without adding a response."""
 
-    ctx = _backend()
-    save_sessions = ctx.save_sessions
-    """Log a recoverable pipeline issue without treating it as an answer."""
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _get_session(ctx, session_id, require_active=False):
+    """Retrieve a session and optionally require active status."""
+    session = ctx.sessions.get(session_id)
+
+    if session is None:
+        raise HTTPException(404, "Session not found.")
+
+    if require_active and session.get("status") != "active":
+        raise HTTPException(409, "Session is not active.")
+
+    return session
+
+
+def _validate_scenario(ctx, scenario_id):
+    """Ensure the scenario exists in the configured database."""
+    if not any(
+        item["scenario_id"] == scenario_id
+        for item in ctx.scenarios_db
+    ):
+        raise HTTPException(404, "Scenario not found.")
+
+
+def _has_response(session, scenario_id):
+    """Check whether a verbal answer was already saved."""
+    return any(
+        result["scenario_id"] == scenario_id
+        for result in session["results"]
+    )
+
+
+def _get_active_scenario(session, scenario_id):
+    """Require the requested scenario to be in progress."""
     state = session.get("scenario_progress", {}).get(str(scenario_id))
+
+    if (
+        state is None
+        or state.get("status") != "in_progress"
+        or session.get("active_scenario_id") != scenario_id
+    ):
+        raise HTTPException(
+            409, "This scenario is not currently in progress."
+        )
+
+    return state
+
+
+def _count_status(progress, status):
+    return sum(
+        state.get("status") == status
+        for state in progress.values()
+    )
+
+
+# -------------------- Issue Logging --------------------
+
+def record_scenario_issue(session, scenario_id, reason):
+    """Log a recoverable failure without creating a verbal answer."""
+    state = session.get("scenario_progress", {}).get(str(scenario_id))
+
     if state is not None and state.get("status") == "in_progress":
         state.setdefault("issues", []).append({
             "reason": reason,
-            "recorded_at": datetime.now(timezone.utc).isoformat()
+            "recorded_at": _now()
         })
-        save_sessions()
+        _backend().save_sessions()
 
+
+# -------------------- Session Management --------------------
 
 @router.post("/api/session/start")
 def start_session():
-    """Open a new session and persist its unique ID and initial state."""
-
+    """Create and persist a new session."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    save_sessions = ctx.save_sessions
     session_id = str(uuid4())
 
-    sessions[session_id] = {
+    ctx.sessions[session_id] = {
         "session_id": session_id,
         "status": "active",
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": _now(),
         "active_scenario_id": None,
         "scenario_progress": {},
         "results": []
     }
-    save_sessions()
+
+    ctx.save_sessions()
+
     return {
         "status": "success",
         "session_id": session_id,
-        "total_scenarios": len(scenarios_db)
+        "total_scenarios": len(ctx.scenarios_db)
     }
 
 
 @router.post("/api/session/end")
 def end_session(data: SessionEnd):
-    """Close a session; preserve the original end time on repeated calls."""
-
+    """End a session without modifying an already ended session."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    save_sessions = ctx.save_sessions
-    session = sessions.get(data.session_id)
-    if session is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Session not found."
-        )
-
-    # Repeated requests are safe and keep the original completion time.
-    if session.get("status") != "active":
-        return {
-            "status": "success",
-            "session_id": data.session_id,
-            "session_status": session["status"],
-            "ended_at": session.get("ended_at"),
-            "completed_scenarios": sum(
-                state.get("status") == "completed"
-                for state in session.get("scenario_progress", {}).values()
-            ),
-            "skipped_scenarios": sum(
-                state.get("status") == "skipped"
-                for state in session.get("scenario_progress", {}).values()
-            ),
-            "total_scenarios": len(scenarios_db),
-            "already_ended": True
-        }
-
-    if session.get("active_scenario_id") is not None:
-        raise HTTPException(
-            status_code=409,
-            detail="Complete the active scenario before ending the session."
-        )
-
+    session = _get_session(ctx, data.session_id)
     progress = session.get("scenario_progress", {})
-    completed_count = sum(
-        progress.get(str(scenario["scenario_id"]), {}).get("status")
-        == "completed"
-        for scenario in scenarios_db
-    )
-    skipped_count = sum(
-        progress.get(str(scenario["scenario_id"]), {}).get("status")
-        == "skipped"
-        for scenario in scenarios_db
-    )
-    all_resolved = completed_count + skipped_count == len(scenarios_db)
 
-    # A session may end early, finish normally, or finish after skipped items.
-    if not all_resolved:
-        session["status"] = "ended_early"
-    elif skipped_count:
-        session["status"] = "completed_with_skips"
+    # Repeated requests preserve the original end time.
+    already_ended = session.get("status") != "active"
+
+    if not already_ended:
+        if session.get("active_scenario_id") is not None:
+            raise HTTPException(
+                409, "Complete the active scenario before ending the session."
+            )
+
+        completed = sum(
+            progress.get(str(s["scenario_id"]), {}).get("status")
+            == "completed"
+            for s in ctx.scenarios_db
+        )
+        skipped = sum(
+            progress.get(str(s["scenario_id"]), {}).get("status")
+            == "skipped"
+            for s in ctx.scenarios_db
+        )
+
+        if completed + skipped != len(ctx.scenarios_db):
+            session["status"] = "ended_early"
+        elif skipped:
+            session["status"] = "completed_with_skips"
+        else:
+            session["status"] = "completed"
+
+        session["ended_at"] = _now()
+        ctx.save_sessions()
     else:
-        session["status"] = "completed"
-    session["ended_at"] = datetime.now(timezone.utc).isoformat()
-    save_sessions()
+        completed = _count_status(progress, "completed")
+        skipped = _count_status(progress, "skipped")
 
     return {
         "status": "success",
         "session_id": data.session_id,
         "session_status": session["status"],
-        "ended_at": session["ended_at"],
-        "completed_scenarios": completed_count,
-        "skipped_scenarios": skipped_count,
-        "total_scenarios": len(scenarios_db),
-        "already_ended": False
+        "ended_at": session.get("ended_at"),
+        "completed_scenarios": completed,
+        "skipped_scenarios": skipped,
+        "total_scenarios": len(ctx.scenarios_db),
+        "already_ended": already_ended
     }
 
 
+# -------------------- Scenario Management --------------------
+
 @router.get("/api/scenario/next")
 def get_next_scenario(index: int = 0):
-    """Return the scenario at a zero-based index or indicate there are no more."""
+    """Get a scenario by its zero-based index."""
+    scenarios = _backend().scenarios_db
 
-    ctx = _backend()
-    scenarios_db = ctx.scenarios_db
-    if index < len(scenarios_db):
+    if index < 0:
+        raise HTTPException(
+            400, "Scenario index cannot be negative."
+        )
+
+    if index < len(scenarios):
         return {
             "status": "success",
             "has_more": True,
-            "scenario": scenarios_db[index]
+            "scenario": scenarios[index]
         }
 
     return {
@@ -160,55 +194,37 @@ def get_next_scenario(index: int = 0):
     }
 
 
-
-
 @router.post("/api/scenario/start")
 def start_scenario(data: ScenarioEvent):
-    """Activate a scenario once; prevent overlapping or duplicate attempts."""
-
+    """Activate a scenario without overlapping previous work."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    save_sessions = ctx.save_sessions
-    session = sessions.get(data.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    if session.get("status") != "active":
-        raise HTTPException(status_code=409, detail="Session is not active.")
-
-    if not any(
-        scenario["scenario_id"] == data.scenario_id
-        for scenario in scenarios_db
-    ):
-        raise HTTPException(status_code=404, detail="Scenario not found.")
+    session = _get_session(ctx, data.session_id, require_active=True)
+    _validate_scenario(ctx, data.scenario_id)
 
     active_id = session.get("active_scenario_id")
+
     if active_id is not None:
         raise HTTPException(
-            status_code=409,
-            detail=f"Scenario {active_id} is already in progress."
+            409, f"Scenario {active_id} is already in progress."
         )
 
     progress = session.setdefault("scenario_progress", {})
     key = str(data.scenario_id)
-    if key in progress or any(
-        result["scenario_id"] == data.scenario_id
-        for result in session["results"]
-    ):
+
+    if key in progress or _has_response(session, data.scenario_id):
         raise HTTPException(
-            status_code=409,
-            detail="This scenario was already started or evaluated."
+            409, "This scenario was already started or evaluated."
         )
 
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = _now()
     progress[key] = {
         "status": "in_progress",
         "started_at": started_at,
         "completed_at": None
     }
+
     session["active_scenario_id"] = data.scenario_id
-    save_sessions()
+    ctx.save_sessions()
 
     return {
         "status": "success",
@@ -221,50 +237,26 @@ def start_scenario(data: ScenarioEvent):
 
 @router.post("/api/scenario/complete")
 def complete_scenario(data: ScenarioEvent):
-    """Complete the active scenario only after its verbal answer was saved."""
-
+    """Complete an active scenario after its verbal response is saved."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    save_sessions = ctx.save_sessions
-    session = sessions.get(data.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found.")
+    session = _get_session(ctx, data.session_id)
+    if session.get("status") != "active":
+        raise HTTPException(409, "Session is not active.")
 
-    if not any(
-        scenario["scenario_id"] == data.scenario_id
-        for scenario in scenarios_db
-    ):
-        raise HTTPException(status_code=404, detail="Scenario not found.")
+    _validate_scenario(ctx, data.scenario_id)
+    state = _get_active_scenario(session, data.scenario_id)
 
-    progress = session.get("scenario_progress", {})
-    state = progress.get(str(data.scenario_id))
-    if (
-        state is None
-        or state.get("status") != "in_progress"
-        or session.get("active_scenario_id") != data.scenario_id
-    ):
+    if not _has_response(session, data.scenario_id):
         raise HTTPException(
-            status_code=409,
-            detail="This scenario is not currently in progress."
+            409, "Cannot complete a scenario without a saved verbal response."
         )
 
-    # Completion requires a saved response; use scenario/recovery to skip
-    # a scenario when there is no usable verbal response.
-    if not any(
-        result["scenario_id"] == data.scenario_id
-        for result in session["results"]
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot complete a scenario without a saved verbal response."
-        )
-
-    completed_at = datetime.now(timezone.utc).isoformat()
+    completed_at = _now()
     state["status"] = "completed"
     state["completed_at"] = completed_at
+
     session["active_scenario_id"] = None
-    save_sessions()
+    ctx.save_sessions()
 
     return {
         "status": "success",
@@ -278,53 +270,33 @@ def complete_scenario(data: ScenarioEvent):
 
 @router.post("/api/scenario/recovery")
 def recover_scenario(data: ScenarioRecovery):
-    """Record a retry or skip after an unsuccessful capture/processing step."""
-
+    """Retry or skip an active scenario after a processing failure."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    save_sessions = ctx.save_sessions
-    session = sessions.get(data.session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found.")
-    if session.get("status") != "active":
-        raise HTTPException(status_code=409, detail="Session is not active.")
+    session = _get_session(ctx, data.session_id, require_active=True)
+    state = _get_active_scenario(session, data.scenario_id)
 
-    state = session.get("scenario_progress", {}).get(str(data.scenario_id))
-    if (
-        state is None
-        or state.get("status") != "in_progress"
-        or session.get("active_scenario_id") != data.scenario_id
-    ):
+    if _has_response(session, data.scenario_id):
         raise HTTPException(
-            status_code=409,
-            detail="This scenario is not currently in progress."
-        )
-
-    if any(
-        result["scenario_id"] == data.scenario_id
-        for result in session["results"]
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="The scenario already has a saved verbal response."
+            409, "The scenario already has a saved verbal response."
         )
 
     event = {
         "action": data.action,
         "reason": data.reason,
-        "recorded_at": datetime.now(timezone.utc).isoformat()
+        "recorded_at": _now()
     }
+
     state.setdefault("recovery_events", []).append(event)
 
-    # Retry keeps the scenario active; skip closes only this scenario.
     if data.action == "skip":
         state["status"] = "skipped"
         state["skip_reason"] = data.reason
         state["completed_at"] = event["recorded_at"]
         session["active_scenario_id"] = None
 
-    save_sessions()
+    # Retry leaves the scenario active.
+    ctx.save_sessions()
+
     return {
         "status": "success",
         "session_id": data.session_id,
@@ -334,53 +306,37 @@ def recover_scenario(data: ScenarioRecovery):
         "reason": data.reason
     }
 
+
+# -------------------- Session Results --------------------
+
 @router.get("/api/session/{session_id}")
 def get_session_results(session_id: str):
-    """Return persisted session progress, captured frames and accuracy counts."""
-
+    """Return session progress and verbal evaluation statistics."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-
-    session = sessions.get(session_id)
-
-    if session is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Session not found."
-        )
+    session = _get_session(ctx, session_id)
 
     results = session["results"]
+    progress = session.get("scenario_progress", {})
 
     summary = {
-        "correct": sum(
-            r["evaluation"] == "Correct"
-            for r in results
-        ),
-        "incorrect": sum(
-            r["evaluation"] == "Incorrect"
-            for r in results
-        ),
-        "unclear": sum(
-            r["evaluation"] == "Unclear"
-            for r in results
+        label.lower(): sum(
+            result["evaluation"] == label
+            for result in results
         )
+        for label in ("Correct", "Incorrect", "Unclear")
     }
 
     return {
         "status": "success",
         "session_id": session_id,
-        "total_scenarios": len(scenarios_db),
+        "total_scenarios": len(ctx.scenarios_db),
         "total_responses": len(results),
         "session_status": session.get("status", "active"),
         "session_started_at": session.get("started_at"),
         "session_ended_at": session.get("ended_at"),
         "active_scenario_id": session.get("active_scenario_id"),
-        "scenario_progress": session.get("scenario_progress", {}),
-        "skipped_scenarios": sum(
-            state.get("status") == "skipped"
-            for state in session.get("scenario_progress", {}).values()
-        ),
+        "scenario_progress": progress,
+        "skipped_scenarios": _count_status(progress, "skipped"),
         "captured_frames": session.get("captured_frames", {}),
         "results": results,
         "summary": summary

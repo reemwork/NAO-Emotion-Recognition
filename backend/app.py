@@ -5,9 +5,16 @@ Feature routers share the same sessions; verbal correctness uses text and
 known scenario labels, not the independent facial classification.
 """
 from fastapi import FastAPI
-from backend.schemas import ChildResponse, ScenarioEvent, SessionEnd, ScenarioRecovery, FacialResult
-from backend import audio, reports, responses, sessions_api, state, vision
+
 from backend.emotion_classifier import classify_emotion
+from backend import audio, reports, responses, sessions_api, state, vision
+from backend.schemas import (
+    ChildResponse,
+    FacialResult,
+    ScenarioEvent,
+    ScenarioRecovery,
+    SessionEnd,
+)
 
 app = FastAPI(title="NAO Emotion Training Backend", version="1.0")
 

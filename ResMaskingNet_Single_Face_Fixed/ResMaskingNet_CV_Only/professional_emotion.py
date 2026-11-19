@@ -1,3 +1,4 @@
+
 """Professional still-image FER interface using pretrained ResMaskingNet (RMN).
 No camera required. Supports Unicode Windows paths and exports PNG + JSON.
 """

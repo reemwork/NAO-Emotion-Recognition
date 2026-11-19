@@ -1,5 +1,12 @@
 # Reem — NAO Data Acquisition & Backend Progress
 
+**Project:** NAO-Based Emotion Recognition System
+**University:** University of Jeddah
+**Academic Year:** 2026–2027
+**Last Updated:** November 16, 2026
+
+---
+
 ## 1. My Responsibilities
 
 My primary responsibility is developing and testing the data acquisition and communication pipeline between the NAO V6 humanoid robot and the PC-based emotion recognition system.
@@ -9,9 +16,10 @@ My work focuses on:
 - NAO microphone and camera integration.
 - Audio recording and image acquisition.
 - Data transfer and file organization.
-- FastAPI backend development.
+- FastAPI backend development and session management.
 - Testing and troubleshooting robot-to-PC communication.
-- Preparing acquired data for downstream AI processing.
+- Integrating acquired data with downstream AI processing components.
+- Supporting system integration, testing, and reporting.
 
 ## 2. Completed Work
 
@@ -37,7 +45,7 @@ My work focuses on:
 - [x] Implemented raw RGB frame transfer to FastAPI.
 - [x] Converted received RGB data into JPEG images.
 - [x] Saved captured images in `data/nao_frames/`.
-- [x] Tested the complete Virtual NAO camera-to-backend workflow.
+- [x] Tested the Virtual NAO camera-to-backend workflow.
 - [x] Tested camera acquisition using the laptop camera and OpenCV.
 - [x] Successfully captured images using the physical NAO V6 camera.
 - [x] Tested physical robot image acquisition using `ALPhotoCapture`.
@@ -52,25 +60,39 @@ My work focuses on:
 
 ### Backend Development
 
-Developed a Python backend using FastAPI.
+Developed and integrated a Python backend using FastAPI to manage interaction sessions, receive data, evaluate verbal responses, and record independent facial-expression observations.
 
-Implemented endpoints:
+Implemented endpoints include:
 
 - [x] `GET /` — Backend health check.
 - [x] `POST /api/session/start` — Initialize a session.
-- [x] `GET /api/scenario/next` — Retrieve a predefined interaction scenario.
-- [x] `POST /api/response/submit` — Receive a spoken-response transcript.
-- [x] `POST /api/camera/frame` — Receive and save an image.
-- [x] `POST /api/camera/raw-frame` — Receive raw RGB data, convert it to JPEG, and save it.
+- [x] `POST /api/session/end` — End an interaction session.
+- [x] `GET /api/scenario/next` — Retrieve predefined scenarios.
+- [x] `POST /api/scenario/start` — Start a scenario.
+- [x] `POST /api/scenario/complete` — Complete a scenario.
+- [x] `POST /api/scenario/recovery` — Handle retry and skip operations.
+- [x] `POST /api/response/submit` — Submit a verbal response.
+- [x] `POST /api/audio/evaluate` — Transcribe and evaluate recorded audio.
+- [x] `POST /api/camera/frame` — Receive and save images.
+- [x] `POST /api/camera/raw-frame` — Receive raw RGB camera data.
+- [x] `POST /api/camera/session-frame` — Associate a captured frame with a session.
+- [x] `POST /api/facial/evaluate` — Analyze facial expressions independently.
+- [x] `GET /api/session/{session_id}/report` — Generate a structured JSON report.
+- [x] `GET /api/session/{session_id}/report/view` — Display an HTML report.
 
-The current backend provides the basic API structure for managing scenarios and receiving data. Full session persistence and automatic AI evaluation are not yet integrated.
+The backend now supports persistent session records, scenario management, verbal-answer evaluation, independent facial-expression analysis, and automated session reporting.
+
+These features have been validated through local integration testing.
 
 ### Data Management & Privacy
 
 - [x] Organized separate folders for recorded audio and captured images.
-- [x] Added recorded audio directories to `.gitignore`.
+- [x] Added locally recorded audio directories to `.gitignore`.
 - [x] Added captured-image directories to `.gitignore`.
-- [x] Excluded locally recorded audio and image files from Git tracking.
+- [x] Excluded local test recordings and captured images from Git tracking.
+- [x] Implemented session-specific storage for uploaded audio and camera frames.
+
+Captured audio and images are intended to remain on the local development computer. Additional privacy and data-retention safeguards require further review before use with real participants.
 
 ## 3. Verified Data Acquisition Workflows
 
@@ -98,67 +120,187 @@ Laptop Camera → OpenCV → FastAPI → Local Storage
 
 **Status:** Successfully tested.
 
-These workflows have been tested separately. A fully synchronized audio-and-camera session is still under development.
+These acquisition workflows have been tested separately. A complete physical NAO interaction integrating audio, camera capture, AI evaluation, and reporting remains to be validated.
 
-## 4. Preliminary AI Processing Tests
+## 4. AI Processing and Local Integration
 
-The captured data is intended to be processed by separate team modules.
+### Speech-to-Text — Whisper Small
 
-Standalone experiments have included:
+- [x] Installed and configured Whisper Small locally.
+- [x] Successfully transcribed an English audio recording.
+- [x] Integrated Whisper with the FastAPI audio evaluation endpoint.
+- [x] Verified transcription results using real model inference.
 
-- Speech transcription using Whisper.
-- Facial expression analysis using DeepFace.
-- Preliminary language model evaluation for text-based emotion classification.
+**Verified transcription example:**
 
-These experiments do not mean that all AI components have been integrated into the final NAO interaction workflow.
+"The girl looks sad because she is crying."
 
-The Speech-to-Text and Computer Vision modules are primarily handled by other team members.
+### Verbal Emotion Classification — Qwen2.5-VL-3B
 
-## 5. Remaining Tasks
+- [x] Configured Qwen2.5-VL-3B locally using Ollama.
+- [x] Tested text emotion classification using real model inference.
+- [x] Integrated verbal classification with the FastAPI backend.
+- [x] Compared the predicted verbal emotion with the scenario's predefined reference label.
+- [x] Verified response correctness evaluation.
 
-### System Integration
+**Local test example:**
 
-- [ ] Synchronize audio recording and camera capture during the same interaction.
-- [ ] Connect the physical NAO data acquisition workflow to the complete backend session pipeline.
-- [ ] Integrate the Speech-to-Text component.
-- [ ] Integrate the selected MLLM emotion classification component.
-- [ ] Integrate the selected facial expression recognition component.
-- [ ] Implement persistent session-level data logging.
-- [ ] Connect classification results to the backend response evaluation process.
+- Reference Label: Happy
+- Transcribed Response: "The girl looks sad because she is crying."
+- Predicted Emotion: Sad
+- Answer Evaluation: Incorrect
 
-### Evaluation and Reporting
+The classification result was evaluated against the reference label of the displayed scenario image.
 
-- [ ] Implement complete response correctness evaluation.
-- [ ] Integrate descriptive verbal–facial emotion comparison.
-- [ ] Generate structured session reports.
-- [ ] Perform end-to-end testing with predefined labeled scenarios.
-- [ ] Measure workflow completion and processing latency.
-- [ ] Resolve integration issues identified during testing.
+### Facial Expression Classification — ResMaskingNet
 
-## 6. Current Project Status
+- [x] Installed and configured ResMaskingNet locally.
+- [x] Tested facial-expression recognition using real model inference.
+- [x] Integrated facial analysis with the FastAPI backend.
+- [x] Successfully analyzed a captured test image before submitting any verbal response.
+- [x] Recorded detected facial expressions and confidence scores independently.
+- [x] Verified that facial observations are preserved after submitting an audio response.
 
-**Status: Core data acquisition and backend components implemented; full system integration in progress.**
+**Local test example:**
 
-The physical NAO V6 has been successfully used for image capture and audio recording.
+- Detected Expression: Angry
+- Confidence: 92.43%
+- Model: ResMaskingNet
+- Facial Observations: 1
 
-Robot-to-PC data transfer has also been demonstrated, and basic FastAPI endpoints have been developed to receive and process acquired data.
+Facial-expression analysis is independent of verbal-response evaluation.
 
-The next major milestone is connecting the existing components into a single coordinated interaction workflow.
+Facial expressions are recorded directly in the session report and are not compared against verbal classifications or used to determine answer correctness.
 
-The complete emotion recognition and reporting system has not yet been validated end-to-end.
+### Session Reporting
 
-## 7. Data Directories
+- [x] Implemented structured JSON session reports.
+- [x] Implemented HTML session reports with captured images.
+- [x] Included verbal classification and answer correctness.
+- [x] Included facial-expression observations and confidence scores.
+- [x] Separated verbal performance and facial observations into independent report sections.
+- [x] Verified that facial analysis can be reported without a submitted verbal response.
+- [x] Verified report contents after both audio and facial results were available.
+- [x] Verified that report data remained accessible after ending a session.
+
+**Report Structure:**
+
+**Section 1 — Verbal Response Evaluation**
+- Reference emotion label.
+- Transcribed spoken response.
+- Predicted verbal emotion.
+- Answer evaluation.
+- Session-level verbal performance statistics.
+
+**Section 2 — Facial Expression Observations**
+- Captured facial images.
+- Detected facial expressions.
+- Model confidence scores.
+- Most frequently observed facial expression.
+- Frame analysis information.
+
+No verbal–facial comparison is included in the report.
+
+## 5. Testing and Validation
+
+### Automated Testing
+
+- [x] Executed the automated Python unit test suite.
+- [x] Passed all 22 unit tests on November 16, 2026.
+- [x] Verified scenario and session management.
+- [x] Verified audio processing error handling using mocked failures.
+- [x] Verified independent facial-expression evaluation.
+- [x] Verified camera frame association with sessions.
+- [x] Verified report generation and result storage.
+
+**Test Results:**
+
+- Tests Executed: 22
+- Tests Passed: 22
+- Tests Failed: 0
+
+These automated tests validate software behavior using controlled test conditions and mocks where applicable.
+
+### Local Integration Testing
+
+A complete local test for one predefined scenario was performed using the actual FastAPI backend and real AI models.
+
+**Verified Workflow:**
+
+1. Started a new session.
+2. Activated Scenario 1.
+3. Uploaded a predefined facial test image.
+4. Analyzed the image using ResMaskingNet before audio submission.
+5. Generated a report containing the facial observation without a verbal response.
+6. Uploaded a recorded audio test file.
+7. Transcribed the audio using Whisper Small.
+8. Classified the verbal emotion using Qwen2.5-VL-3B.
+9. Evaluated the verbal answer against the reference label.
+10. Verified that verbal and facial results appeared independently in the report.
+11. Completed Scenario 1.
+12. Ended the session early after completing one of four scenarios.
+13. Viewed the final HTML report.
+
+**Result:** Local integration test passed.
+
+**Session Status:** `ended_early`
+**Completed Scenarios:** 1 of 4
+**Skipped Scenarios:** 0
+
+The image and audio came from separate test sources. This test validates technical processing and reporting, not the interpretation of a single participant's synchronized behavior.
+
+## 6. Remaining Tasks
+
+### Physical NAO Integration
+
+- [ ] Validate the complete automated workflow using the physical NAO V6.
+- [ ] Verify audio and facial-image acquisition within the same physical interaction.
+- [ ] Validate data transfer and AI processing during live robot operation.
+- [ ] Test the complete four-scenario interaction workflow.
+- [ ] Verify stable communication between NAO and the PC during full sessions.
+- [ ] Test recovery behavior under physical robot and network failures.
+
+### Evaluation and Reliability
+
+- [ ] Measure end-to-end processing latency.
+- [ ] Evaluate system reliability across repeated sessions.
+- [ ] Validate camera capture quality under different lighting conditions.
+- [ ] Test the system using additional predefined labeled scenarios.
+- [ ] Review privacy safeguards and data-retention procedures.
+- [ ] Resolve any integration issues identified during physical robot testing.
+
+## 7. Current Project Status
+
+**Status: Local AI and backend integration validated; full physical NAO workflow testing pending.**
+
+The physical NAO V6 has been successfully used for microphone recording, camera acquisition, and SSH/SCP data transfer during earlier development.
+
+Whisper Small, Qwen2.5-VL-3B, and ResMaskingNet have been integrated and tested locally with FastAPI.
+
+A complete local test involving one predefined scenario was successfully performed, including verbal-response evaluation, independent facial-expression analysis, scenario completion, session termination, and report generation.
+
+All 22 automated unit tests passed on November 16, 2026.
+
+The next major milestone is validating the complete workflow on the physical NAO robot across all four scenarios.
+
+The project remains in the technical prototype development and evaluation stage.
+
+## 8. Data Directories
+
+The project uses dedicated directories for acquired and processed data, including:
 
 ```text
 data/
 ├── laptop_audio/
 ├── nao_audio/
-└── nao_frames/
+├── nao_frames/
+├── session_audio/
+└── session_frames/
 ```
 
-These directories store locally captured data and are excluded from version control.
+These directories support local storage of recorded audio and camera images. Captured test data should remain excluded from version control.
 
-## 8. Project Scope
+## 9. Project Scope
 
 The project is designed to support structured emotion-recognition activities involving four target emotions:
 
@@ -169,14 +311,19 @@ The project is designed to support structured emotion-recognition activities inv
 
 The system uses predefined emotional images, open-ended verbal responses, and independent facial-expression analysis.
 
-The current evaluation scope is limited to prototype testing using predefined labeled scenarios. Testing with children with Autism Spectrum Disorder (ASD) is not part of the current implementation phase.
+The verbal-processing branch evaluates the emotion described in the spoken response against the displayed image's reference label.
+
+The facial-processing branch identifies visible facial expressions and records the results in the session report for specialist review.
+
+The two branches are not compared against each other.
+
+The current evaluation scope is limited to technical prototype testing using predefined labeled scenarios.
+
+Testing with children with Autism Spectrum Disorder (ASD) is not part of the current implementation phase.
 
 ---
 
 **Contributor:** Reem Abdulhameed
-
 **Project:** NAO-Based Emotion Recognition System
-
 **University:** University of Jeddah
-
 **Academic Year:** 2026–2027

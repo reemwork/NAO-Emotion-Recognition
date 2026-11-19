@@ -1,37 +1,50 @@
+
 """Verbal answer evaluation endpoint.
 
-The MLLM classifies transcribed speech (text only); this module compares the
-predicted label with the scenario's reference label and persists Correct /
-Incorrect / Unclear. Facial expressions remain independent observations.
+The MLLM classifies transcribed speech (text only); this module compares
+the predicted label with the scenario's reference label and persists
+Correct / Incorrect / Unclear.
+
+Facial expressions remain independent observations.
 """
+
 import requests
 from fastapi import APIRouter, HTTPException
 
 import backend
 from backend.schemas import ChildResponse
 
+
 router = APIRouter(tags=["Verbal Emotion Evaluation"])
 
+
 def _backend():
-    """Look up shared session state and the configured Qwen adapter."""
-    # Use the already loaded package module (no recursive re-import).
-    # This also preserves monkeypatched backend.app aliases in offline tests.
+    """Look up shared session state and the configured Qwen adapter.
+
+    Use the already loaded package module rather than recursively
+    importing it. This also preserves monkeypatched backend.app
+    aliases in offline tests.
+    """
     return backend.app
+
 
 @router.post("/api/response/submit")
 def submit_response(data: ChildResponse):
-    """Classify spoken text with Qwen and compare it with the scenario's known label.
-    
-        Correctness depends ONLY on the verbal description; camera predictions
-        are recorded separately and do not affect this evaluation."""
+    """Evaluate a verbal response against the scenario's reference label.
+
+    Correctness depends only on the verbal classification.
+    Facial observations do not affect this evaluation.
+    """
 
     ctx = _backend()
+
     sessions = ctx.sessions
     scenarios_db = ctx.scenarios_db
     classify_emotion = ctx.classify_emotion
     record_scenario_issue = ctx.record_scenario_issue
     save_sessions = ctx.save_sessions
 
+    # Step 1: Validate the session.
     session = sessions.get(data.session_id)
 
     if session is None:
@@ -46,6 +59,15 @@ def submit_response(data: ChildResponse):
             detail="Session has already ended."
         )
 
+    # Ensure that the submitted response belongs to
+    # the currently active scenario.
+    if session.get("active_scenario_id") != data.scenario_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Response does not match the active scenario."
+        )
+
+    # Step 2: Validate the scenario.
     scenario = next(
         (
             item for item in scenarios_db
@@ -60,6 +82,7 @@ def submit_response(data: ChildResponse):
             detail="Scenario not found."
         )
 
+    # Step 3: Validate the spoken response.
     spoken_text = data.spoken_text.strip()
 
     if not spoken_text:
@@ -68,6 +91,7 @@ def submit_response(data: ChildResponse):
             detail="Response cannot be empty."
         )
 
+    # Prevent duplicate verbal results for one scenario.
     if any(
         result["scenario_id"] == data.scenario_id
         for result in session["results"]
@@ -77,21 +101,27 @@ def submit_response(data: ChildResponse):
             detail="Response already submitted for this scenario."
         )
 
-    # Step 1: Qwen sees the spoken text, NOT the scenario image/reference label.
-    # This prevents the model from reading the answer directly.
+    # Step 4: Classify the verbal response using local Qwen.
+    # Qwen receives only spoken text, not the displayed
+    # image or its predefined reference label.
     try:
         predicted_emotion = classify_emotion(spoken_text)
 
     except (requests.RequestException, RuntimeError) as error:
-        record_scenario_issue(session, data.scenario_id, "processing_failed")
+        record_scenario_issue(
+            session,
+            data.scenario_id,
+            "processing_failed"
+        )
+
         print("MLLM classification failed:", error)
+
         raise HTTPException(
             status_code=503,
             detail="Emotion classification is unavailable."
-        )
+        ) from error
 
-    # Step 2: Evaluate verbal correctness using the predefined reference label.
-    # An 'Unclear' description is neither a correct nor an incorrect answer.
+    # Step 5: Evaluate against the predefined image label.
     reference_label = scenario["reference_label"]
 
     if predicted_emotion == "Unclear":
@@ -103,7 +133,7 @@ def submit_response(data: ChildResponse):
     else:
         evaluation = "Incorrect"
 
-    # Step 3: Save the result in the current session
+    # Step 6: Save the verbal evaluation.
     result = {
         "scenario_id": data.scenario_id,
         "reference_label": reference_label,
@@ -112,10 +142,13 @@ def submit_response(data: ChildResponse):
         "evaluation": evaluation
     }
 
-    # Link any images captured earlier; camera-first and audio-first both work.
+    # Link any frames captured for this scenario.
+    # These references are for reporting only.
+    # Facial classifications do not affect correctness.
     frames = session.get("captured_frames", {}).get(
         str(data.scenario_id), []
     )
+
     if frames:
         result["face_image_file"] = frames[-1]
         result["face_image_files"] = frames.copy()

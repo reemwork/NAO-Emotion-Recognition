@@ -1,8 +1,10 @@
-"""NAO audio API: WAV uploads, robot transfers, Whisper transcription, evaluation.
 
-Whisper itself is loaded by backend.transcribe_audio for compatibility with
-existing standalone transcription scripts; this module owns the complete
-request processing workflow without changing the selected STT model.
+"""NAO audio API: WAV uploads, robot transfers, and Whisper evaluation.
+
+The session-based workflow uses English Whisper transcription followed
+by text-only Qwen classification through the verbal response endpoint.
+
+Legacy upload and SCP endpoints remain available for compatibility.
 """
 
 import glob
@@ -10,6 +12,7 @@ import os
 import re
 import subprocess
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -18,107 +21,160 @@ import backend
 from backend.transcribe_audio import model as whisper_model
 from backend.transcribe_audio import transcribe_audio
 
+
 router = APIRouter(tags=["Audio / Speech-to-Text"])
+
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
+SCP_TIMEOUT = 60
 
 
 def _backend():
-    """Access shared session state lazily; avoids import cycles."""
-    # Use the already loaded package module (no recursive re-import).
-    # This also preserves monkeypatched backend.app aliases in offline tests.
+    """Access shared state without triggering circular imports."""
     return backend.app
+
+
+def _read_wav(audio: UploadFile):
+    """Read a bounded WAV upload and validate its container header."""
+    if not (audio.filename or "").lower().endswith(".wav"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only WAV audio files are supported."
+        )
+
+    data = audio.file.read(MAX_AUDIO_BYTES + 1)
+
+    if not data or len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio must be non-empty and at most 20 MB."
+        )
+
+    if (
+        len(data) < 12
+        or data[:4] != b"RIFF"
+        or data[8:12] != b"WAVE"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid WAV file."
+        )
+
+    return data
 
 
 @router.post("/api/audio/upload")
 async def upload_nao_audio(audio: UploadFile = File(...)):
-    """Accept a standalone WAV upload, save it, and run the legacy STT helper.
-    
-    This endpoint is not session-linked. Unlike /api/audio/evaluate,
-    the helper in transcribe_audio.py currently requests Arabic STT."""
-    transcribe_audio = _backend().transcribe_audio
-    folder = "data/nao_audio"
-    os.makedirs(folder, exist_ok=True)
+    """Save and transcribe a standalone WAV upload.
+
+    This legacy endpoint is not linked to a training session.
+    Its transcription helper retains its existing language settings.
+    """
+    transcribe = _backend().transcribe_audio
+
+    folder = Path("data/nao_audio")
+    folder.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-    audio_filename = f"response_{timestamp}.wav"
-    audio_file_path = os.path.join(folder, audio_filename)
+    audio_path = folder / f"response_{timestamp}.wav"
+    text_path = folder / f"response_{timestamp}.txt"
 
-    contents = await audio.read()
+    # The legacy endpoint also uses bounded WAV validation.
+    audio_data = await audio.read(MAX_AUDIO_BYTES + 1)
 
-    with open(audio_file_path, "wb") as f:
-        f.write(contents)
+    if not audio_data or len(audio_data) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Audio must be non-empty and at most 20 MB."
+        )
 
-    transcript = transcribe_audio(audio_file_path)
+    if (
+        len(audio_data) < 12
+        or audio_data[:4] != b"RIFF"
+        or audio_data[8:12] != b"WAVE"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid WAV file."
+        )
 
-    text_filename = f"response_{timestamp}.txt"
-    text_file_path = os.path.join(folder, text_filename)
+    audio_path.write_bytes(audio_data)
 
-    with open(text_file_path, "w", encoding="utf-8") as f:
-        f.write(transcript)
+    try:
+        transcript = transcribe(str(audio_path))
+    except Exception as error:
+        audio_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Audio transcription failed."
+        ) from error
+
+    text_path.write_text(transcript, encoding="utf-8")
 
     return {
         "status": "success",
         "message": "NAO audio saved and transcribed successfully",
-        "audio_file": audio_file_path,
-        "text_file": text_file_path,
+        "audio_file": str(audio_path),
+        "text_file": str(text_path),
         "transcript": transcript
     }
 
+
 @router.post("/api/audio/capture")
 def capture_nao_audio():
-    """Copy the robot's pre-recorded WAV to the local computer via SCP.
-    
-    The robot must already have finished recording and SSH access must work.
-    This legacy endpoint does not attach the recording to a session."""
-    # These are legacy fixed paths; confirm the current NAO behavior before use.
-    nao_ip = "169.254.247.199"
+    """Copy a pre-recorded WAV file from NAO using SCP.
+
+    NAO_IP may be supplied as an environment variable.
+    The previous IP remains a fallback for legacy usage.
+    """
+    nao_ip = os.environ.get("NAO_IP", "169.254.247.199")
     remote_audio = "/home/nao/recordings/microphones/response.wav"
 
-    folder = "data/nao_audio"
-    os.makedirs(folder, exist_ok=True)
-
-    audio_files = glob.glob(
-        os.path.join(folder, "response_*.wav")
-    )
+    folder = Path("data/nao_audio")
+    folder.mkdir(parents=True, exist_ok=True)
 
     numbers = []
 
-    for file in audio_files:
-        filename = os.path.basename(file)
-
+    for path in glob.glob(str(folder / "response_*.wav")):
         match = re.fullmatch(
             r"response_(\d+)\.wav",
-            filename
+            Path(path).name
         )
 
         if match:
             numbers.append(int(match.group(1)))
 
     next_number = max(numbers, default=0) + 1
-
-    audio_filename = f"response_{next_number}.wav"
-    audio_file_path = os.path.join(folder, audio_filename)
+    audio_path = folder / f"response_{next_number}.wav"
 
     try:
         subprocess.run(
             [
                 "scp",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=10",
                 f"nao@{nao_ip}:{remote_audio}",
-                audio_file_path
+                str(audio_path)
             ],
-            check=True
+            check=True,
+            timeout=SCP_TIMEOUT
         )
 
-    except subprocess.CalledProcessError:
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        OSError
+    ) as error:
+        audio_path.unlink(missing_ok=True)
         raise HTTPException(
-            status_code=500,
+            status_code=502,
             detail="Failed to download audio from NAO."
-        )
+        ) from error
 
     return {
         "status": "success",
         "message": "NAO audio downloaded successfully",
-        "audio_file": audio_file_path
+        "audio_file": str(audio_path)
     }
 
 
@@ -128,23 +184,10 @@ def evaluate_audio(
     scenario_id: int = Form(...),
     audio: UploadFile = File(...)
 ):
-    """Validate session-linked WAV audio, transcribe it, and evaluate its text.
-    
-    The active session/scenario must exist. Whisper uses English in this
-    endpoint; the resulting transcript is passed to the same Qwen-based
-    verbal evaluation as /api/response/submit. Returns the stored result."""
+    """Transcribe an active scenario's WAV and evaluate its verbal answer."""
     ctx = _backend()
-    sessions = ctx.sessions
-    scenarios_db = ctx.scenarios_db
-    ROOT = ctx.ROOT
-    whisper_model = ctx.whisper_model
-    record_scenario_issue = ctx.record_scenario_issue
-    submit_response = ctx.submit_response
-    ChildResponse = ctx.ChildResponse
-    save_sessions = ctx.save_sessions
 
-    # Verify that the session exists.
-    session = sessions.get(session_id)
+    session = ctx.sessions.get(session_id)
 
     if session is None:
         raise HTTPException(
@@ -158,17 +201,27 @@ def evaluate_audio(
             detail="Session has already ended."
         )
 
-    # Verify that the scenario exists.
     if not any(
         item["scenario_id"] == scenario_id
-        for item in scenarios_db
+        for item in ctx.scenarios_db
     ):
         raise HTTPException(
             status_code=404,
             detail="Scenario not found."
         )
 
-    # Prevent duplicate submissions.
+    # Reject mismatched or inactive scenarios before running Whisper.
+    if (
+        session.get("active_scenario_id") != scenario_id
+        or session.get("scenario_progress", {})
+            .get(str(scenario_id), {})
+            .get("status") != "in_progress"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Audio does not match the active scenario."
+        )
+
     if any(
         result["scenario_id"] == scenario_id
         for result in session["results"]
@@ -178,49 +231,32 @@ def evaluate_audio(
             detail="Response already submitted for this scenario."
         )
 
-    # WAV is the only audio format accepted for session-based evaluation.
-    # This request does not fetch audio from NAO; the caller uploads it.
-    if not (audio.filename or "").lower().endswith(".wav"):
-        raise HTTPException(
-            status_code=400,
-            detail="Only WAV audio files are supported."
-        )
+    audio_data = _read_wav(audio)
 
-    # Read and validate uploaded audio.
-    audio_data = audio.file.read()
-
-    if not audio_data or len(audio_data) > 20 * 1024 * 1024:
-        raise HTTPException(
-            status_code=400,
-            detail="Audio must be non-empty and at most 20 MB."
-        )
-
-    # Save audio under the current session.
     audio_folder = (
-        ROOT / "data" / "session_audio" / session_id
+        ctx.ROOT / "data" / "session_audio" / session_id
     )
-
     audio_folder.mkdir(parents=True, exist_ok=True)
 
-    audio_filename = (
-        f"scenario_{scenario_id}_{uuid4().hex[:8]}.wav"
+    audio_path = (
+        audio_folder
+        / f"scenario_{scenario_id}_{uuid4().hex[:8]}.wav"
     )
-
-    audio_path = audio_folder / audio_filename
     audio_path.write_bytes(audio_data)
 
-    # STEP 1 - Whisper converts WAV -> English text; no emotion inference yet.
+    # Step 1: Whisper converts speech to English text.
     try:
-        whisper_result = whisper_model.transcribe(
+        whisper_result = ctx.whisper_model.transcribe(
             str(audio_path),
             language="en",
             fp16=False
         )
-
         transcript = whisper_result["text"].strip()
 
     except Exception as error:
-        record_scenario_issue(session, scenario_id, "transcription_failed")
+        ctx.record_scenario_issue(
+            session, scenario_id, "transcription_failed"
+        )
         audio_path.unlink(missing_ok=True)
 
         raise HTTPException(
@@ -229,7 +265,9 @@ def evaluate_audio(
         ) from error
 
     if not transcript:
-        record_scenario_issue(session, scenario_id, "no_speech_recognized")
+        ctx.record_scenario_issue(
+            session, scenario_id, "no_speech_recognized"
+        )
         audio_path.unlink(missing_ok=True)
 
         raise HTTPException(
@@ -237,11 +275,11 @@ def evaluate_audio(
             detail="No speech was recognized."
         )
 
-    # STEP 2 - Reuse the same Qwen classifier and reference-label check
-    # used for a manually submitted transcript.
+    # Step 2: Send text only to Qwen and compare its predicted
+    # emotion against the predefined scenario reference label.
     try:
-        response = submit_response(
-            ChildResponse(
+        response = ctx.submit_response(
+            ctx.ChildResponse(
                 session_id=session_id,
                 scenario_id=scenario_id,
                 spoken_text=transcript
@@ -252,14 +290,12 @@ def evaluate_audio(
         audio_path.unlink(missing_ok=True)
         raise
 
-    # STEP 3 - Attach the recording's relative path to the saved answer.
-    # The report can now trace the text back to its source WAV.
-    relative_audio_path = audio_path.relative_to(ROOT)
+    # Step 3: Attach the audio source to the saved verbal result.
+    relative_audio_path = audio_path.relative_to(ctx.ROOT)
 
     response["saved_result"]["audio_file"] = (
         relative_audio_path.as_posix()
     )
 
-    save_sessions()
-
+    ctx.save_sessions()
     return response

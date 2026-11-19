@@ -1,78 +1,72 @@
-"""Legacy Whisper-small transcription helper for standalone NAO WAV files.
 
-Loads the model once when imported. The current legacy path transcribes
-Arabic; the session-based /api/audio/evaluate route uses English separately.
+"""Whisper Small transcription helper for NAO audio recordings.
+
+The model is loaded once per Python process and reused for transcription.
+Both standalone and session-based transcription use English.
 """
 
-import glob
-import os
-import re
+from pathlib import Path
 
 import whisper
 
-# Load once and reuse for multiple requests; this may allocate model RAM.
+
+# Load Whisper Small once when this module is imported.
 model = whisper.load_model("small")
 
 
 def transcribe_audio(file_path):
-    """Transcribe a saved WAV file with the shared Whisper-small model.
-
-    This standalone/legacy helper currently sets language='ar' (Arabic).
-    The session-aware /api/audio/evaluate endpoint separately uses English."""
+    """Transcribe a WAV recording into English text."""
     result = model.transcribe(
-        file_path,
-        language="ar"
+        str(file_path),
+        language="en",
+        fp16=False
     )
 
     return result["text"].strip()
 
 
-if __name__ == "__main__":
+def get_latest_audio(folder):
+    """Find the most recently modified NAO WAV recording."""
+    audio_folder = Path(folder)
 
-    audio_folder = "data/nao_audio"
-
-    audio_files = glob.glob(
-        os.path.join(audio_folder, "response_*.wav")
-    )
+    audio_files = list(audio_folder.glob("response_*.wav"))
 
     if not audio_files:
+        return None
+
+    return max(
+        audio_files,
+        key=lambda file: file.stat().st_mtime_ns
+    )
+
+
+def main():
+    """Transcribe the latest standalone NAO recording."""
+    audio_folder = Path("data/nao_audio")
+    audio_path = get_latest_audio(audio_folder)
+
+    if audio_path is None:
         print("Error: No audio files found.")
-        exit()
-
-
-    def get_number(file_path):
-        """Extract the numeric index from a response_<number>.wav filename."""
-        filename = os.path.basename(file_path)
-
-        match = re.search(
-            r"response_(\d+)\.wav$",
-            filename
-        )
-
-        if match:
-            return int(match.group(1))
-
-        return -1
-
-
-    file_path = max(audio_files, key=get_number)
+        return
 
     print("Transcribing NAO audio...")
-    print("Audio:", file_path)
+    print("Audio:", audio_path)
 
     try:
-        text = transcribe_audio(file_path)
+        text = transcribe_audio(audio_path)
 
         print("\n========== TRANSCRIPTION ==========")
         print(text)
         print("===================================")
 
-        text_file = os.path.splitext(file_path)[0] + ".txt"
-
-        with open(text_file, "w", encoding="utf-8") as f:
-            f.write(text)
+        text_file = audio_path.with_suffix(".txt")
+        text_file.write_text(text, encoding="utf-8")
 
         print("\nTranscription saved to:", text_file)
 
-    except Exception as e:
-        print("Error:", e)
+    except Exception as error:
+        print("Error:", error)
+
+
+if __name__ == "__main__":
+    main()

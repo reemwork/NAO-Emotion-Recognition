@@ -1,29 +1,37 @@
+
+"""Load and persist NAO training session data.
+
+Scenarios are loaded from scenarios.json.
+Session progress, verbal responses, and facial observations
+are stored in sessions.json and restored on backend startup.
 """
-This file handles loading and saving data for NAO training sessions.
-
-It loads the scenarios from scenarios.json, including the image
-and the correct emotion label for each scenario.
-
-It also saves session information in sessions.json, such as
-the responses, results, and progress.
-
-This way, the data is not lost when the backend is restarted.
-"""
-
 
 import json
 from pathlib import Path
+from threading import Lock
+
+
+# -------------------- File Paths --------------------
 
 ROOT = Path(__file__).resolve().parent.parent
+
 SCENARIOS_FILE = ROOT / "data" / "scenarios.json"
+SESSIONS_FILE = ROOT / "data" / "sessions.json"
+
+# Protect concurrent file writes within one Python process.
+_save_lock = Lock()
+
+
+# -------------------- Scenario Loading --------------------
 
 with open(SCENARIOS_FILE, "r", encoding="utf-8") as file:
     scenarios_db = json.load(file)
-SESSIONS_FILE = ROOT / "data" / "sessions.json"
 
+
+# -------------------- Session Loading --------------------
 
 def load_sessions():
-    """Read previous sessions, or start with an empty dictionary."""
+    """Restore saved sessions or return an empty dictionary."""
     if not SESSIONS_FILE.exists():
         return {}
 
@@ -34,21 +42,28 @@ def load_sessions():
 sessions = load_sessions()
 
 
+# -------------------- Session Saving --------------------
+
 def save_sessions():
-    """Persist all sessions using a temporary-file replacement."""
-    SESSIONS_FILE.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    """Save sessions with a lock and atomic file replacement.
 
-    temp_file = SESSIONS_FILE.with_suffix(".json.tmp")
-
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(
-            sessions,
-            file,
-            indent=4,
-            ensure_ascii=False
+    The lock prevents simultaneous writes within one process.
+    The temporary file reduces the risk of partial JSON files.
+    """
+    with _save_lock:
+        SESSIONS_FILE.parent.mkdir(
+            parents=True,
+            exist_ok=True
         )
 
-    temp_file.replace(SESSIONS_FILE)
+        temp_file = SESSIONS_FILE.with_suffix(".json.tmp")
+
+        with open(temp_file, "w", encoding="utf-8") as file:
+            json.dump(
+                sessions,
+                file,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        temp_file.replace(SESSIONS_FILE)

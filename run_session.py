@@ -3,6 +3,9 @@
 
 Runs a real NAO session using SSH, NAOqi, FastAPI,
 Whisper, Qwen, and ResMaskingNet.
+
+Physical NAO sessions capture 4 frames per scenario.
+Legacy single-image calls remain supported for testing.
 """
 
 import argparse
@@ -25,6 +28,8 @@ API = "http://127.0.0.1:8000"
 OLLAMA = "http://127.0.0.1:11434"
 MODEL = "qwen2.5vl:3b"
 
+FRAME_COUNT = 4
+
 # NAO V6 uses Python 2 NAOqi bindings.
 NAO_PYTHON_COMMAND = (
     'env PYTHONPATH=/opt/aldebaran/lib/python2.7/site-packages:'
@@ -45,6 +50,7 @@ def req(method, path, **kwargs):
             timeout=kwargs.pop("timeout", 30),
             **kwargs
         )
+
         res.raise_for_status()
         return res.json()
 
@@ -56,8 +62,8 @@ def req(method, path, **kwargs):
         )
 
         raise IntegrationError(
-            "%s %s: %s %s" %
-            (method, path, error, detail[:400])
+            "%s %s: %s %s"
+            % (method, path, error, detail[:400])
         ) from error
 
 
@@ -102,6 +108,7 @@ def preflight(ip, check_robot=True):
             OLLAMA + "/api/tags",
             timeout=10
         )
+
         r.raise_for_status()
 
         names = [
@@ -125,11 +132,19 @@ def preflight(ip, check_robot=True):
         probe_robot(ip)
 
 
+# ============================================================
+# ROBOT SCRIPT - PYTHON 2
+# ============================================================
+
 # This script runs inside NAO using Python 2.
 # Do not use Python 3-only syntax here.
+
 ROBOT_SCRIPT = r'''
 from naoqi import ALProxy
-import base64, os, time, sys
+import base64
+import os
+import time
+import sys
 
 ip = "127.0.0.1"
 
@@ -141,15 +156,13 @@ question = base64.b64decode("__QUESTION_B64__")
 label = "__LABEL__"
 
 audio = "/home/nao/" + label + ".wav"
-image = "/home/nao/" + label + ".jpg"
+images = []
 
 try:
     if os.path.exists(audio):
         os.unlink(audio)
 
-    if os.path.exists(image):
-        os.unlink(image)
-
+    # Ask the question before recording.
     tts.say(question)
 
     recorder.startMicrophonesRecording(
@@ -160,33 +173,72 @@ try:
     )
 
     try:
-        time.sleep(2)
-
         photo.setCameraID(0)
         photo.setResolution(2)
         photo.setPictureFormat("jpg")
 
-        returned = photo.takePicture(
-            "/home/nao",
-            label
-        )
+        started = time.time()
 
-        if not os.path.isfile(image):
-            candidates = (
-                returned
-                if isinstance(returned, (list, tuple))
-                else [returned]
+        # Target capture times: 1, 3, 5, 7 seconds.
+        capture_times = (1, 3, 5, 7)
+
+        for i, target in enumerate(capture_times):
+
+            remaining = target - (time.time() - started)
+
+            if remaining > 0:
+                time.sleep(remaining)
+
+            frame_label = (
+                label + "_frame_" + str(i + 1)
             )
 
-            for candidate in candidates:
-                if (
-                    isinstance(candidate, basestring)
-                    and os.path.isfile(candidate)
-                ):
-                    image = candidate
-                    break
+            frame_path = (
+                "/home/nao/" + frame_label + ".jpg"
+            )
 
-        time.sleep(6)
+            if os.path.exists(frame_path):
+                os.unlink(frame_path)
+
+            returned = photo.takePicture(
+                "/home/nao",
+                frame_label
+            )
+
+            if not os.path.isfile(frame_path):
+
+                candidates = (
+                    returned
+                    if isinstance(returned, (list, tuple))
+                    else [returned]
+                )
+
+                for candidate in candidates:
+                    if (
+                        isinstance(candidate, basestring)
+                        and os.path.isfile(candidate)
+                    ):
+                        frame_path = candidate
+                        break
+
+            if not os.path.isfile(frame_path):
+                raise RuntimeError(
+                    "Frame %s was not created"
+                    % (i + 1)
+                )
+
+            images.append(frame_path)
+
+            print(
+                "Captured frame %s: %s"
+                % (i + 1, frame_path)
+            )
+
+        # Keep recording until at least 8 seconds.
+        remaining = 8 - (time.time() - started)
+
+        if remaining > 0:
+            time.sleep(remaining)
 
     finally:
         recorder.stopMicrophonesRecording()
@@ -194,13 +246,19 @@ try:
     if not os.path.isfile(audio):
         raise RuntimeError("Audio not created")
 
-    if not os.path.isfile(image):
+    if len(images) != 4:
         raise RuntimeError(
-            "Camera image not created: " + str(returned)
+            "Expected 4 frames, got %s"
+            % len(images)
         )
 
     print("__AUDIO__=" + audio)
-    print("__IMAGE__=" + image)
+
+    for i, image in enumerate(images):
+        print(
+            "__IMAGE_%s__=%s"
+            % (i + 1, image)
+        )
 
 except Exception as e:
     sys.stderr.write(
@@ -210,8 +268,12 @@ except Exception as e:
 '''
 
 
+# ============================================================
+# CAPTURE AND TRANSFER FROM NAO
+# ============================================================
+
 def capture_from_robot(ip, question, label, dest):
-    """Capture audio and image from the physical NAO."""
+    """Capture audio and 4 images from the physical NAO."""
 
     safe_label = re.sub(
         r"[^A-Za-z0-9_]",
@@ -246,27 +308,49 @@ def capture_from_robot(ip, question, label, dest):
     outputs = dict(
         line.split("=", 1)
         for line in p.stdout.splitlines()
-        if line.startswith(
-            ("__AUDIO__=", "__IMAGE__=")
-        )
+        if line.startswith("__AUDIO__=")
+        or re.match(r"^__IMAGE_[1-4]__=", line)
     )
 
-    if (
-        "__AUDIO__" not in outputs
-        or "__IMAGE__" not in outputs
-    ):
+    required = ["__AUDIO__"] + [
+        "__IMAGE_%s__" % i
+        for i in range(1, FRAME_COUNT + 1)
+    ]
+
+    missing = [
+        key for key in required
+        if key not in outputs
+    ]
+
+    if missing:
         raise IntegrationError(
-            "Missing capture paths from NAO: "
-            + p.stdout[-700:]
+            "Missing capture paths from NAO: %s. Output: %s"
+            % (missing, p.stdout[-700:])
         )
 
     local_audio = dest / (safe_label + ".wav")
-    local_image = dest / (safe_label + ".jpg")
 
-    for remote, local in (
-        (outputs["__AUDIO__"], local_audio),
-        (outputs["__IMAGE__"], local_image)
-    ):
+    local_images = [
+        dest / (
+            safe_label + "_frame_" + str(i) + ".jpg"
+        )
+        for i in range(1, FRAME_COUNT + 1)
+    ]
+
+    transfers = [
+        (outputs["__AUDIO__"], local_audio)
+    ]
+
+    for i, local_image in enumerate(local_images, start=1):
+        transfers.append(
+            (
+                outputs["__IMAGE_%s__" % i],
+                local_image
+            )
+        )
+
+    for remote, local in transfers:
+
         if not remote.startswith("/home/nao/"):
             raise IntegrationError(
                 "Unsafe remote capture path: " + remote
@@ -288,73 +372,24 @@ def capture_from_robot(ip, question, label, dest):
                 "Empty capture: " + str(local)
             )
 
-    return local_audio, local_image
+    print(
+        "Transferred audio and %s frames from NAO."
+        % len(local_images)
+    )
+
+    return local_audio, local_images
 
 
-def upload_capture(sid, scenario_id, audio, image):
-    """Upload NAO image and audio to the backend."""
-
-    # Validate the active session and scenario before uploading.
-    session = req("GET", "/api/session/" + sid)
-
-    if (
-        session.get("session_status") != "active"
-        or session.get("active_scenario_id") != scenario_id
-    ):
-        raise IntegrationError(
-            "Session/scenario mismatch. "
-            "The requested scenario must be active before uploading."
-        )
-
-    # Upload the facial image first.
-    with image.open("rb") as file:
-        req(
-            "POST",
-            "/api/camera/session-frame",
-            data={
-                "session_id": sid,
-                "scenario_id": str(scenario_id)
-            },
-            files={
-                "frame": (
-                    image.name,
-                    file,
-                    "image/jpeg"
-                )
-            },
-            timeout=60
-        )
-
-    # Analyze the camera frame independently, before speech processing.
-    # Its report observation remains available even if transcription fails.
-    analyze_facial_expression(sid, scenario_id)
-
-    # Upload audio for Whisper and Qwen evaluation.
-    with audio.open("rb") as file:
-        return req(
-            "POST",
-            "/api/audio/evaluate",
-            data={
-                "session_id": sid,
-                "scenario_id": str(scenario_id)
-            },
-            files={
-                "audio": (
-                    audio.name,
-                    file,
-                    "audio/wav"
-                )
-            },
-            timeout=360
-        )
-
+# ============================================================
+# FACIAL ANALYSIS
+# ============================================================
 
 def analyze_facial_expression(sid, scenario_id):
-    """Analyze the NAO camera image using ResMaskingNet.
+    """Analyze the latest uploaded frame using ResMaskingNet.
 
     Facial analysis is independent of verbal correctness.
-    A failure must not invalidate a successfully evaluated
-    spoken response.
+    A failed facial evaluation must not invalidate a
+    successfully evaluated spoken response.
     """
 
     try:
@@ -387,6 +422,134 @@ def analyze_facial_expression(sid, scenario_id):
         return None
 
 
+# ============================================================
+# UPLOAD CAMERA FRAMES AND AUDIO
+# ============================================================
+
+def upload_capture(sid, scenario_id, audio, images):
+    """Upload camera frames and audio to the backend.
+
+    Supports:
+      - A single Path (legacy tests)
+      - A list of 4 Paths (physical NAO workflow)
+    """
+
+    # Backward compatibility with single-image callers.
+    if isinstance(images, (str, Path)):
+        images = [Path(images)]
+    else:
+        images = [Path(image) for image in images]
+
+    audio = Path(audio)
+
+    # Validate the active session and scenario.
+    session = req(
+        "GET",
+        "/api/session/" + sid
+    )
+
+    if (
+        session.get("session_status") != "active"
+        or session.get("active_scenario_id") != scenario_id
+    ):
+        raise IntegrationError(
+            "Session/scenario mismatch. "
+            "The requested scenario must be active before uploading."
+        )
+
+    if len(images) not in (1, FRAME_COUNT):
+        raise IntegrationError(
+            "Expected 1 or %s frames, got %s"
+            % (FRAME_COUNT, len(images))
+        )
+
+    successful_observations = 0
+
+    for i, image in enumerate(images, start=1):
+
+        if not image.is_file():
+            raise IntegrationError(
+                "Image not found: " + str(image)
+            )
+
+        print(
+            "Uploading frame %s/%s: %s"
+            % (i, len(images), image.name)
+        )
+
+        # Upload one frame.
+        with image.open("rb") as file:
+            upload_result = req(
+                "POST",
+                "/api/camera/session-frame",
+                data={
+                    "session_id": sid,
+                    "scenario_id": str(scenario_id)
+                },
+                files={
+                    "frame": (
+                        image.name,
+                        file,
+                        "image/jpeg"
+                    )
+                },
+                timeout=60
+            )
+
+        print(
+            "Frame saved:",
+            upload_result.get("image_file")
+        )
+
+        # The backend analyzes the latest frame.
+        # Analyze immediately after each upload.
+        facial_result = analyze_facial_expression(
+            sid,
+            scenario_id
+        )
+
+        if (
+            facial_result is not None
+            and facial_result.get("facial_result")
+        ):
+            successful_observations += 1
+
+    print(
+        "Facial observations: %s/%s"
+        % (successful_observations, len(images))
+    )
+
+    # Process the audio using Whisper and Qwen.
+    if not audio.is_file():
+        raise IntegrationError(
+            "Audio file not found: " + str(audio)
+        )
+
+    with audio.open("rb") as file:
+        result = req(
+            "POST",
+            "/api/audio/evaluate",
+            data={
+                "session_id": sid,
+                "scenario_id": str(scenario_id)
+            },
+            files={
+                "audio": (
+                    audio.name,
+                    file,
+                    "audio/wav"
+                )
+            },
+            timeout=360
+        )
+
+    return result
+
+
+# ============================================================
+# DISPLAY SCENARIO
+# ============================================================
+
 def show_image(scenario):
     """Display the scenario image on the laptop screen."""
 
@@ -403,6 +566,10 @@ def show_image(scenario):
 
     webbrowser.open(path.as_uri())
 
+
+# ============================================================
+# RUN COMPLETE SESSION
+# ============================================================
 
 def run(args):
     """Run a complete NAO emotion recognition session."""
@@ -443,6 +610,7 @@ def run(args):
                     break
 
                 scenario = response["scenario"]
+
                 scenario_id = int(
                     scenario["scenario_id"]
                 )
@@ -472,20 +640,30 @@ def run(args):
 
                 try:
 
-                    # Optional sample replay for offline testing.
+                    # Offline testing without NAO.
                     if args.samples_dir:
 
                         audio = args.samples_dir / (
                             "scenario_%s.wav" % scenario_id
                         )
 
-                        image = args.samples_dir / (
-                            "scenario_%s.jpg" % scenario_id
-                        )
+                        images = [
+                            args.samples_dir / (
+                                "scenario_%s_frame_%s.jpg"
+                                % (scenario_id, i)
+                            )
+                            for i in range(
+                                1,
+                                FRAME_COUNT + 1
+                            )
+                        ]
 
-                        if not (
-                            audio.is_file()
-                            and image.is_file()
+                        if (
+                            not audio.is_file()
+                            or not all(
+                                image.is_file()
+                                for image in images
+                            )
                         ):
                             raise IntegrationError(
                                 "Sample WAV/JPG not found "
@@ -496,7 +674,7 @@ def run(args):
                     else:
 
                         # Capture directly from physical NAO.
-                        audio, image = capture_from_robot(
+                        audio, images = capture_from_robot(
                             args.nao_ip,
                             question,
                             "nao_%s_%s"
@@ -504,13 +682,13 @@ def run(args):
                             folder
                         )
 
-                    # Upload and analyze the NAO frame independently,
-                    # then process the recorded audio using Whisper/Qwen.
+                    # Upload and analyze camera frames,
+                    # then process audio using Whisper/Qwen.
                     result = upload_capture(
                         sid,
                         scenario_id,
                         audio,
-                        image
+                        images
                     )
 
                     print(
@@ -642,6 +820,10 @@ def run(args):
             )
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
@@ -669,8 +851,8 @@ if __name__ == "__main__":
         "--samples-dir",
         type=Path,
         help=(
-            "Replay scenario WAV/JPG files without NAO "
-            "(offline testing only)"
+            "Replay scenario WAV and 4 JPG frames "
+            "without NAO (offline testing only)"
         )
     )
 

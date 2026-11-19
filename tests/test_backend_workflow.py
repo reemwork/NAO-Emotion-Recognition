@@ -7,6 +7,7 @@ Whisper/Qwen and network/NAO transfers are mocked. No real microphone,
 camera, robot, local Ollama model, or participant files are needed.
 """
 import asyncio
+import wave
 import importlib
 import io
 import tempfile
@@ -41,10 +42,20 @@ def sample_image():
 
 
 def sample_audio():
-    """Create a lightweight fake WAV upload; Whisper is mocked in these tests."""
+    """Create a valid WAV upload for mocked Whisper tests."""
+    stream = io.BytesIO()
+
+    with wave.open(stream, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 1600)
+
+    stream.seek(0)
+
     return UploadFile(
         filename="recording.wav",
-        file=io.BytesIO(b"RIFF" + b"0" * 44)
+        file=stream
     )
 
 
